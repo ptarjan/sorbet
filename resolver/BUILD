@@ -26,3 +26,26 @@ cc_library(
         "//resolver/type_syntax",
     ],
 )
+
+cc_test(
+    name = "resolver_test",
+    size = "small",
+    srcs = glob([
+        "test/*.cc",
+    ]),
+    linkstatic = select({
+        "//tools/config:linkshared": 0,
+        "//conditions:default": 1,
+    }),
+    visibility = ["//tools:__pkg__"],
+    deps = [
+        "resolver",
+        "//ast/desugar",
+        "//local_vars",
+        "//namer",
+        "//parser",
+        "//rewriter",
+        "@doctest//doctest",
+        "@doctest//doctest:main",
+    ],
+)
