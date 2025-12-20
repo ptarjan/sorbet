@@ -21,6 +21,18 @@ using namespace std;
 namespace sorbet::compiler {
 
 namespace {
+
+// Check if a file has the "# compiled: true" sigil
+bool isCompiledFile(const core::GlobalState &gs, core::FileRef file) {
+    if (!file.exists()) {
+        return false;
+    }
+    auto source = file.data(gs).source();
+    // Look in the first 500 characters for the compiled sigil
+    auto searchRegion = source.substr(0, std::min(source.size(), size_t(500)));
+    return searchRegion.find("compiled: true") != std::string_view::npos;
+}
+
 string getFunctionNamePrefix(CompilerState &cs, core::ClassOrModuleRef sym) {
     auto maybeAttached = sym.data(cs)->attachedClass(cs);
     if (maybeAttached.exists()) {
@@ -439,9 +451,11 @@ IREmitterHelpers::isFinalMethod(const core::GlobalState &gs, core::TypePtr recvT
     }
 
     auto file = funSym.data(gs)->loc().file();
-    // NOTE: compiledLevel was removed when the compiler was removed.
-    // When the compiler is in use, we assume all files are being compiled.
-    // TODO: Re-add compiledLevel tracking if needed for partial compilation support.
+    // Only use direct calls for final methods if the target method is in a compiled file.
+    // If the method is in an interpreted file, we can't use a direct function pointer call.
+    if (!isCompiledFile(gs, file)) {
+        return std::nullopt;
+    }
 
     return IREmitterHelpers::FinalMethodInfo{recvSym, funSym, file};
 }
