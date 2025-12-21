@@ -30,7 +30,7 @@ def register_ruby_dependencies():
     http_file(
         name = "bundler_stripe",
         urls = _rubygems_urls("bundler-1.17.3.gem"),
-        sha256 = "bc4bf75b548b27451aa9f443b18c46a739dd22ad79f7a5f90b485376a67dc352",
+        sha256 = "c20b924e327c01b8d1aebdd7de87518939902f986a73a1140008a76cd748b0b3",  # Built from source
     )
 
     http_file(
@@ -43,7 +43,7 @@ def register_ruby_dependencies():
     http_file(
         name = "rubygems_update_stripe_ruby2",
         urls = _rubygems_urls("rubygems-update-3.3.3.gem"),
-        sha256 = "610aef544e0c15ff3cd5492dff3f5f46bd2062896f4f62c7191432c6f1d681c9",
+        sha256 = "c92e8ca0d7be2cead6d3ea77813c8dc2c26db211195d8dbaa076bc437ad44630",  # Built from source
     )
 
     ruby_build = "@com_stripe_ruby_typer//third_party/ruby:ruby.BUILD"
