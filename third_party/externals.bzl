@@ -195,8 +195,9 @@ def register_sorbet_dependencies():
 
     http_archive(
         name = "build_bazel_rules_nodejs",
-        sha256 = "e79c08a488cc5ac40981987d862c7320cee8741122a2649e9b08e850b6f20442",
-        urls = _github_public_urls("bazelbuild/rules_nodejs/releases/download/3.8.0/rules_nodejs-3.8.0.tar.gz"),
+        sha256 = "3a11b2ea34407064da54376a38a85c7c71c1fdf880e9ec8d2e67f9839852ee77",
+        urls = _github_public_urls("bazelbuild/rules_nodejs/archive/3.8.0.tar.gz"),
+        strip_prefix = "rules_nodejs-3.8.0",
     )
 
     http_archive(
@@ -284,8 +285,9 @@ def register_sorbet_dependencies():
 
     http_archive(
         name = "rules_m4",
-        urls = _github_public_urls("jmillikin/rules_m4/releases/download/v0.2.1/rules_m4-v0.2.1.tar.xz"),
-        sha256 = "f59f75ac8a315d7647a2d058d324a87ff9ebbc4bf5c7a61b08d58da119a7fb43",
+        urls = _github_public_urls("jmillikin/rules_m4/archive/v0.2.1.tar.gz"),
+        sha256 = "eaa674cd84546038ecbcc49cdd346134a20961a41fa1a541e80d8bf4b470c34d",
+        strip_prefix = "rules_m4-0.2.1",
     )
 
     http_archive(
@@ -327,7 +329,7 @@ def register_sorbet_dependencies():
         name = "aspect_bazel_lib",
         sha256 = "357dad9d212327c35d9244190ef010aad315e73ffa1bed1a29e20c372f9ca346",
         strip_prefix = "bazel-lib-2.7.0",
-        urls = _github_public_urls("aspect-build/bazel-lib/releases/download/v2.7.0/bazel-lib-v2.7.0.tar.gz"),
+        urls = _github_public_urls("aspect-build/bazel-lib/archive/v2.7.0.tar.gz"),
     )
 
     http_archive(

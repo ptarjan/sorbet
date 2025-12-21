@@ -5,25 +5,26 @@ def register_ruby_dependencies():
     libyaml_version = "0.2.5"
     http_archive(
         name = "libyaml",
-        urls = _github_public_urls("yaml/libyaml/releases/download/{}/yaml-{}.tar.gz".format(libyaml_version, libyaml_version)),
-        sha256 = "c642ae9b75fee120b2d96c712538bd2cf283228d2337df2cf2988e3c02678ef4",
-        strip_prefix = "yaml-{}".format(libyaml_version),
+        urls = _github_public_urls("yaml/libyaml/archive/{}.tar.gz".format(libyaml_version)),
+        sha256 = "fa240dbf262be053f3898006d502d514936c818e422afdcf33921c63bed9bf2e",
+        strip_prefix = "libyaml-{}".format(libyaml_version),
         build_file = "@com_stripe_ruby_typer//third_party/ruby:libyaml.BUILD",
     )
 
     libffi_version = "3.4.5"
     http_archive(
         name = "libffi",
-        urls = _github_public_urls("libffi/libffi/releases/download/v{}/libffi-{}.tar.gz".format(libffi_version, libffi_version)),
-        sha256 = "96fff4e589e3b239d888d9aa44b3ff30693c2ba1617f953925a70ddebcc102b2",
+        urls = _github_public_urls("libffi/libffi/archive/v{}.tar.gz".format(libffi_version)),
+        sha256 = "0b942b74ed3ffc5e7670187a7ddb23ad5b51ed8d14317737f26e0431d1258f53",
         strip_prefix = "libffi-{}".format(libffi_version),
         build_file = "@com_stripe_ruby_typer//third_party/ruby:libffi.BUILD",
     )
 
     http_archive(
         name = "rules_rust",
-        sha256 = "25209daff2ba21e818801c7b2dab0274c43808982d6aea9f796d899db6319146",
-        urls = _github_public_urls("bazelbuild/rules_rust/releases/download/0.21.1/rules_rust-v0.21.1.tar.gz"),
+        sha256 = "1ff2bf7e3d28c9e159d283b242f9fdb9f3423e237d8bbb0710b92049a0903424",
+        urls = _github_public_urls("bazelbuild/rules_rust/archive/0.21.1.tar.gz"),
+        strip_prefix = "rules_rust-0.21.1",
     )
 
     http_file(
@@ -58,9 +59,9 @@ def register_ruby_dependencies():
         build_file = ruby_2_build,
     )
 
-    urls = _ruby_urls("2.7/ruby-2.7.2.tar.gz")
-    sha256 = "6e5706d0d4ee4e1e2f883db9d768586b4d06567debea353c796ec45e8321c3d4"
-    strip_prefix = "ruby-2.7.2"
+    urls = _github_public_urls("ruby/ruby/archive/v2_7_2.tar.gz")
+    sha256 = "60986e07bbf1d69f547951dfb76ac4cdee6128a26f235f7501080cc308d30c9f"
+    strip_prefix = "ruby-2_7_2"
 
     http_archive(
         name = "sorbet_ruby_2_7_unpatched",
