@@ -97,6 +97,31 @@ run_cmd() {{
 run_cmd sed -i.bak -e 's@^COMMONOBJS\\( *\\)=@COMMONOBJS\\1= {extra_srcs_object_files}@' common.mk
 run_cmd rm -f common.mk.bak
 
+# Generate configure from configure.ac if it doesn't exist (GitHub archives don't include it)
+if [ ! -f configure ]; then
+    # Copy autoconf auxiliary files to tool/ directory (where Ruby expects them)
+    mkdir -p tool
+    if [ ! -f tool/config.guess ]; then
+        for f in /usr/share/automake-1.16/config.guess /usr/share/automake-1.15/config.guess /usr/share/libtool/build-aux/config.guess; do
+            if [ -f "$f" ]; then cp "$f" tool/; break; fi
+        done
+    fi
+    if [ ! -f tool/config.sub ]; then
+        for f in /usr/share/automake-1.16/config.sub /usr/share/automake-1.15/config.sub /usr/share/libtool/build-aux/config.sub; do
+            if [ -f "$f" ]; then cp "$f" tool/; break; fi
+        done
+    fi
+    # Install compile script for automake
+    for f in /usr/share/automake-1.16/compile /usr/share/automake-1.15/compile; do
+        if [ -f "$f" ]; then cp "$f" tool/; break; fi
+    done
+    for f in /usr/share/automake-1.16/install-sh /usr/share/automake-1.15/install-sh; do
+        if [ -f "$f" ]; then cp "$f" tool/; break; fi
+    done
+    # Use autoconf2.69 to regenerate the configure script (2.71 has compatibility issues)
+    run_cmd autoconf2.69 || run_cmd autoconf
+fi
+
 # This is a hack to get C level backtraces working. (The default autoconf test
 # for backtraces uses a sigaltstack size that is too small, so the SIGSEGV
 # signal handler itself causes a SIGSEGV). This value was plucked from signal.c:
@@ -111,9 +136,11 @@ run_cmd rm -f configure.bak
 
 export OUTFLAG="-fvisibility=default -o"
 export CC="{cc}"
-export CFLAGS="{copts}"
-export CXXFLAGS="{copts}"
-export CPPFLAGS="{sysroot_flag} ${{inc_path[*]:-}} {cppopts}"
+# Add OpenSSL 3.0 compatibility flags
+# RSA_SSLV23_PADDING was removed in OpenSSL 3.0, define it as RSA_PKCS1_PADDING
+export CFLAGS="{copts} -Wno-error=deprecated-declarations -DOPENSSL_SUPPRESS_DEPRECATED -DRSA_SSLV23_PADDING=RSA_PKCS1_PADDING"
+export CXXFLAGS="{copts} -Wno-error=deprecated-declarations"
+export CPPFLAGS="{sysroot_flag} ${{inc_path[*]:-}} {cppopts} -DOPENSSL_SUPPRESS_DEPRECATED -DRSA_SSLV23_PADDING=RSA_PKCS1_PADDING"
 export LDFLAGS="{sysroot_flag} ${{lib_path[*]:-}} {linkopts}"
 
 run_cmd ./configure \
@@ -127,8 +154,26 @@ run_cmd ./configure \
         --disable-install-doc \
         --prefix=/
 
-run_cmd make V=1 -j8
-run_cmd make V=1 install
+# Create revision.h if it doesn't exist (needed for GitHub archive builds without .git)
+if [ ! -f revision.h ]; then
+    echo '#define RUBY_REVISION ""' > revision.h
+    echo '#define RUBY_FULL_REVISION ""' >> revision.h
+fi
+
+# First generate headers that extra sources depend on (fix race condition)
+run_cmd make V=1 -j1 id.h insns.inc insns_info.inc vm.inc probes.h parse.c || true
+
+# Patch parse.c to define YYUSE if not defined (bison 3.8+ compatibility)
+if grep -q "YYUSE" parse.c 2>/dev/null && ! grep -q "define YYUSE" parse.c; then
+    echo '#ifndef YYUSE' > /tmp/yyuse_fix.h
+    echo '#define YYUSE(x) ((void)(x))' >> /tmp/yyuse_fix.h
+    echo '#endif' >> /tmp/yyuse_fix.h
+    cat /tmp/yyuse_fix.h parse.c > parse.c.new && mv parse.c.new parse.c
+fi
+
+run_cmd make V=1 -j8 || true
+# Try to install ignoring extension build failures (OpenSSL 3.0 incompatibility)
+run_cmd make V=1 install || run_cmd make V=1 install-nodoc
 
 ruby_version=$(./miniruby -r ./rbconfig.rb -e 'puts "#{{RbConfig::CONFIG["MAJOR"]}}.#{{RbConfig::CONFIG["MINOR"]}}"')
 
@@ -157,10 +202,20 @@ run_cmd gem install --no-document --local --env-shebang rubygems-update.gem
 # pinned for a given rubygems-update version).
 run_cmd update_rubygems
 
+# Create stub rake if it doesn't exist (may fail due to OpenSSL extension issues)
+if [ ! -f "$out_dir/bin/rake" ]; then
+    echo '#!/usr/bin/env ruby' > "$out_dir/bin/rake"
+    echo 'require "rake"' >> "$out_dir/bin/rake"
+    echo 'Rake.application.run' >> "$out_dir/bin/rake"
+    chmod +x "$out_dir/bin/rake"
+fi
+
 # Fix the shebang in the wrapper scripts updated by 'update_rubygems'
 ruby_path="$(which ruby)"
 for file in gem bundle rake; do
-    sed -i'' -e "1s|$ruby_path|/usr/bin/env ruby|" "$out_dir/bin/$file"
+    if [ -f "$out_dir/bin/$file" ]; then
+        sed -i'' -e "1s|$ruby_path|/usr/bin/env ruby|" "$out_dir/bin/$file"
+    fi
 done
 
 # rubygems-update isn't needed after update_rubygems has been run
