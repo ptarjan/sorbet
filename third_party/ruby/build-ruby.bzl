@@ -303,7 +303,7 @@ def _build_ruby_impl(ctx):
             rubygems = ctx.files.rubygems[0].path,
             libyaml = ctx.files.libyaml[0].dirname,
             libffi = ctx.files.libffi[0].dirname,
-            rustc = ctx.toolchains["@rules_rust//rust:toolchain_type"].rustc.path,
+            rustc = "/usr/bin/true",  # Rust not needed for Ruby 2.7
             configure_flags = " ".join(ctx.attr.configure_flags),
             sysroot_flag = ctx.attr.sysroot_flag,
             install_extra_srcs = "\n".join(install_extra_srcs),
@@ -311,7 +311,7 @@ def _build_ruby_impl(ctx):
             install_append_srcs = "\n".join(install_append_srcs),
             install_gems = "\n".join(install_gems),
         )),
-        tools = [ctx.toolchains["@rules_rust//rust:toolchain_type"].rustc],
+        tools = [],  # Rust not needed for Ruby 2.7
     )
 
     return [
@@ -376,7 +376,7 @@ _build_ruby = rule(
         RubyInfo,
         DefaultInfo,
     ],
-    toolchains = ["@bazel_tools//tools/cpp:toolchain_type", "@rules_rust//rust:toolchain_type"],
+    toolchains = ["@bazel_tools//tools/cpp:toolchain_type"],  # Rust not needed for Ruby 2.7
     implementation = _build_ruby_impl,
 )
 
