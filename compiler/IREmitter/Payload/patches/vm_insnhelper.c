@@ -310,12 +310,18 @@ again:
             // context, and attempts to project out the cref from the method entry, which does not have a valid cref in
             // a compiled context.
             // https://github.com/ruby/ruby/blob/5445e0435260b449decf2ac16f9d09bae3cafe72/vm_eval.c#L173-L198
+            //
+            // IMPORTANT: We cannot call vm_call_refined here because it uses vm_get_cref which fails
+            // in CFUNC context. Instead, we follow the vm_call0_body approach.
 
             const rb_callable_method_entry_t *cme = vm_cc_cme(cc);
             if (cme->def->body.refined.orig_me) {
-                cme = refined_method_callable_without_refinement(cme);
-                // In Ruby 3.0, we need to do a new method search
-                return vm_call_refined(ec, cfp, calling);
+                // If there's an original method (not refined), call it directly
+                const rb_callable_method_entry_t *orig_cme = refined_method_callable_without_refinement(cme);
+                // Update the calling info with the original method entry and recurse
+                struct rb_callcache *ref_cc = &VM_CC_ON_STACK(Qundef, vm_call_general, { 0 }, orig_cme);
+                calling->cc = ref_cc;
+                return sorbet_vm_call_method_each_type(ec, cfp, calling);
             }
 
             VALUE super_class = RCLASS_SUPER(cme->defined_class);
@@ -323,8 +329,10 @@ again:
                 const rb_callable_method_entry_t *super_cme = rb_callable_method_entry(super_class, vm_ci_mid(ci));
                 if (super_cme) {
                     RUBY_VM_CHECK_INTS(ec);
-                    // In Ruby 3.0, we delegate to vm_call_refined which handles this
-                    return vm_call_refined(ec, cfp, calling);
+                    // Call the super method directly
+                    struct rb_callcache *ref_cc = &VM_CC_ON_STACK(Qundef, vm_call_general, { 0 }, super_cme);
+                    calling->cc = ref_cc;
+                    return sorbet_vm_call_method_each_type(ec, cfp, calling);
                 }
             }
 
