@@ -121,7 +121,7 @@ bool TypeSyntax::isSig(core::Context ctx, const ast::Send &send) {
     if (send.numPosArgs() == 1 || send.numPosArgs() == 2) {
         if (auto recv = ast::cast_tree<ast::ConstantLit>(send.recv)) {
             if (recv->symbol() == core::Symbols::Sorbet_Private_Static()) {
-                auto arg0 = send.getPosArg(0);
+                const auto &arg0 = send.getPosArg(0);
                 if (arg0.isSelfReference()) {
                     return true;
                 }
