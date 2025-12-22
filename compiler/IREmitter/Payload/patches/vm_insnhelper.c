@@ -120,10 +120,11 @@ void sorbet_setupFunctionInlineCache(struct FunctionInlineCache *cache, ID mid, 
     const struct rb_callinfo_kwarg *kw_arg = NULL;
 
     if (num_kwargs > 0) {
-        // The layout for struct rb_callinfo_kwarg has a 1-element array as the last field, so allocating
-        // additional space will extend that array's length.
+        // In Ruby 3.0, rb_callinfo_kwarg uses a C99 flexible array member (VALUE keywords[])
+        // so we need to allocate num_kwargs * sizeof(VALUE) + sizeof(struct rb_callinfo_kwarg).
+        // Use rb_callinfo_kwarg_bytes helper when available, or replicate its calculation.
         struct rb_callinfo_kwarg *kw_arg_mutable = (struct rb_callinfo_kwarg *)rb_xmalloc_mul_add(
-            num_kwargs - 1, sizeof(VALUE), sizeof(struct rb_callinfo_kwarg));
+            num_kwargs, sizeof(VALUE), sizeof(struct rb_callinfo_kwarg));
 
         kw_arg_mutable->keyword_len = num_kwargs;
         for (int i = 0; i < num_kwargs; ++i) {
