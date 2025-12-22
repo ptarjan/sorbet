@@ -1,3 +1,6 @@
+// Include regex first to avoid poison identifier issue with std::sort
+#include <regex>
+
 #ifdef SORBET_REALMAIN_MIN
 // minimal build to speedup compilation. Remove extra features
 #else
