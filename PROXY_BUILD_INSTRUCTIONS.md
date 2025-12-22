@@ -6,44 +6,228 @@ Bazel's Java-based HTTP downloader fails with "401 Unauthorized" or "Unable to t
 
 ## Solution Overview
 
-1. **Use curl for downloads** - curl correctly uses `$https_proxy` environment variables
-2. **Pre-fetch dependencies** to a local distdir
-3. **Install LLVM via apt** and use `--override_repository` (GitHub releases are often blocked)
-4. **Download Bazel from GCS** instead of GitHub releases
+1. **Install system packages** - LLVM, libc++, bison, ragel, m4, Ruby
+2. **Download Bazel from GCS** - GitHub releases are blocked
+3. **Download blocked repos via codeload.github.com** - Works through proxy
+4. **Use `--override_repository`** for all blocked dependencies
+5. **Generate prism templates** using Ruby
 
-## Quick Start
+## Complete Build Script
 
 ```bash
-# Step 1: Install system LLVM (required - GitHub releases are blocked)
-sudo apt-get update && sudo apt-get install -y clang-15 lld-15 llvm-15 llvm-15-dev
+#!/bin/bash
+set -e
 
-# Step 2: Download Bazel from GCS (not GitHub)
+# ============================================================================
+# STEP 1: Install System Dependencies
+# ============================================================================
+sudo apt-get update
+sudo apt-get install -y \
+    clang-15 lld-15 llvm-15 llvm-15-dev \
+    clang-format-15 \
+    libc++-15-dev libc++abi-15-dev \
+    ragel \
+    ruby ruby-bundler
+
+# Install rake-compiler for prism template generation
+gem install rake-compiler
+
+# ============================================================================
+# STEP 2: Download Bazel from GCS (not GitHub)
+# ============================================================================
 mkdir -p ~/.local/bin
 curl -L -o ~/.local/bin/bazel "https://storage.googleapis.com/bazel/6.5.0/release/bazel-6.5.0-linux-x86_64"
 chmod +x ~/.local/bin/bazel
+export LOCAL_BAZEL_OVERRIDE=~/.local/bin/bazel
 
-# Step 3: Create distdir config
-cat > .bazelrc.local << 'EOF'
-build --distdir=/root/.cache/bazel-distdir
-fetch --distdir=/root/.cache/bazel-distdir
-query --distdir=/root/.cache/bazel-distdir
-EOF
-
-# Step 4: Pre-fetch dependencies
-python3 prefetch_deps_v2.py
-
-# Step 5: Setup local LLVM override
+# ============================================================================
+# STEP 3: Setup Local LLVM
+# ============================================================================
 LLVM_LOCAL="/tmp/llvm_local"
 mkdir -p "$LLVM_LOCAL"
 cp -r /usr/lib/llvm-15/bin "$LLVM_LOCAL/"
 cp -r /usr/lib/llvm-15/include "$LLVM_LOCAL/"
 cp -r /usr/lib/llvm-15/lib "$LLVM_LOCAL/"
 cp -r /usr/lib/llvm-15/share "$LLVM_LOCAL/"
+
+# Add clang-format symlink
+ln -sf /usr/bin/clang-format-15 "$LLVM_LOCAL/bin/clang-format"
+
+# Copy libc++ libraries
+cp /usr/lib/llvm-15/lib/libc++abi.a "$LLVM_LOCAL/lib/"
+cp /usr/lib/x86_64-linux-gnu/libc++.a "$LLVM_LOCAL/lib/"
+cp /usr/lib/llvm-15/lib/libc++abi.so* "$LLVM_LOCAL/lib/" 2>/dev/null || true
+cp /usr/lib/x86_64-linux-gnu/libc++.so* "$LLVM_LOCAL/lib/" 2>/dev/null || true
+
 echo 'workspace(name = "llvm_toolchain_15_0_7_llvm")' > "$LLVM_LOCAL/WORKSPACE"
 
-# Step 6: Build with overrides
-export LOCAL_BAZEL_OVERRIDE=~/.local/bin/bazel
-./bazel build //main:sorbet --config=dbg --override_repository=llvm_toolchain_15_0_7_llvm=/tmp/llvm_local
+# ============================================================================
+# STEP 4: Download Blocked Repositories via codeload.github.com
+# ============================================================================
+REPOS_DIR="/tmp/bazel_repos"
+mkdir -p "$REPOS_DIR"
+
+download_repo() {
+    local name=$1
+    local org=$2
+    local repo=$3
+    local tag=$4
+    local workspace_name=$5
+
+    echo "Downloading $name..."
+    mkdir -p "$REPOS_DIR/$name"
+    curl -L -o "$REPOS_DIR/$name.tar.gz" "https://codeload.github.com/$org/$repo/tar.gz/refs/tags/$tag"
+    tar -xzf "$REPOS_DIR/$name.tar.gz" -C "$REPOS_DIR/$name" --strip-components=1
+    rm "$REPOS_DIR/$name.tar.gz"
+    echo "workspace(name = \"$workspace_name\")" > "$REPOS_DIR/$name/WORKSPACE"
+}
+
+# Download all blocked repositories
+download_repo "platforms" "bazelbuild" "platforms" "0.0.10" "platforms"
+download_repo "bazel_skylib" "bazelbuild" "bazel-skylib" "1.5.0" "bazel_skylib"
+download_repo "io_bazel_rules_go" "bazelbuild" "rules_go" "v0.43.0" "io_bazel_rules_go"
+download_repo "aspect_bazel_lib" "aspect-build" "bazel-lib" "v2.7.0" "aspect_bazel_lib"
+download_repo "rules_m4" "jmillikin" "rules_m4" "v0.2.3" "rules_m4"
+download_repo "rules_java" "bazelbuild" "rules_java" "7.4.0" "rules_java"
+download_repo "rules_cc" "bazelbuild" "rules_cc" "0.0.9" "rules_cc"
+download_repo "rules_proto" "bazelbuild" "rules_proto" "5.3.0-21.7" "rules_proto"
+download_repo "rules_pkg" "bazelbuild" "rules_pkg" "0.7.0" "rules_pkg"
+download_repo "build_bazel_rules_nodejs" "aspect-build" "rules_nodejs" "core-5.8.2" "build_bazel_rules_nodejs"
+download_repo "rules_nodejs" "aspect-build" "rules_nodejs" "5.8.2" "rules_nodejs"
+
+# Download prism and generate templates
+download_repo "prism" "ruby" "prism" "v1.6.0" "prism"
+cp third_party/prism.BUILD "$REPOS_DIR/prism/BUILD.bazel"
+cd "$REPOS_DIR/prism" && ruby -S rake templates
+cd -
+
+# ============================================================================
+# STEP 5: Create Bison, M4, Ragel Wrappers (use system binaries)
+# ============================================================================
+
+# Bison wrapper
+mkdir -p "$REPOS_DIR/bison_v3.3.2/bin"
+mkdir -p "$REPOS_DIR/bison_v3.3.2/data"
+cp -r /usr/share/bison/* "$REPOS_DIR/bison_v3.3.2/data/"
+cat > "$REPOS_DIR/bison_v3.3.2/bin/bison_wrapper.sh" << 'WRAPPER'
+#!/bin/bash
+export BISON_PKGDATADIR="/usr/share/bison"
+export M4="/usr/bin/m4"
+exec /usr/bin/bison "$@"
+WRAPPER
+chmod +x "$REPOS_DIR/bison_v3.3.2/bin/bison_wrapper.sh"
+echo 'workspace(name = "bison_v3.3.2")' > "$REPOS_DIR/bison_v3.3.2/WORKSPACE"
+cat > "$REPOS_DIR/bison_v3.3.2/BUILD.bazel" << 'BUILD'
+package(default_visibility = ["//visibility:public"])
+filegroup(name = "bison_data", srcs = glob(["data/**/*"]))
+BUILD
+cat > "$REPOS_DIR/bison_v3.3.2/bin/BUILD.bazel" << 'BUILD'
+package(default_visibility = ["//visibility:public"])
+sh_binary(name = "bison", srcs = ["bison_wrapper.sh"], data = ["//:bison_data"])
+BUILD
+
+# M4 wrapper
+mkdir -p "$REPOS_DIR/m4_v1.4.18/bin"
+cat > "$REPOS_DIR/m4_v1.4.18/bin/m4_wrapper.sh" << 'WRAPPER'
+#!/bin/bash
+exec /usr/bin/m4 "$@"
+WRAPPER
+chmod +x "$REPOS_DIR/m4_v1.4.18/bin/m4_wrapper.sh"
+echo 'workspace(name = "m4_v1.4.18")' > "$REPOS_DIR/m4_v1.4.18/WORKSPACE"
+echo 'package(default_visibility = ["//visibility:public"])' > "$REPOS_DIR/m4_v1.4.18/BUILD.bazel"
+cat > "$REPOS_DIR/m4_v1.4.18/bin/BUILD.bazel" << 'BUILD'
+package(default_visibility = ["//visibility:public"])
+sh_binary(name = "m4", srcs = ["m4_wrapper.sh"])
+BUILD
+
+# Ragel wrapper
+mkdir -p "$REPOS_DIR/ragel_v6.10/bin"
+cat > "$REPOS_DIR/ragel_v6.10/bin/ragel_wrapper.sh" << 'WRAPPER'
+#!/bin/bash
+exec /usr/bin/ragel "$@"
+WRAPPER
+chmod +x "$REPOS_DIR/ragel_v6.10/bin/ragel_wrapper.sh"
+echo 'workspace(name = "ragel_v6.10")' > "$REPOS_DIR/ragel_v6.10/WORKSPACE"
+echo 'package(default_visibility = ["//visibility:public"])' > "$REPOS_DIR/ragel_v6.10/BUILD.bazel"
+cat > "$REPOS_DIR/ragel_v6.10/bin/BUILD.bazel" << 'BUILD'
+package(default_visibility = ["//visibility:public"])
+sh_binary(name = "ragel", srcs = ["ragel_wrapper.sh"])
+BUILD
+
+# ============================================================================
+# STEP 6: Setup LLVM Toolchain Override
+# ============================================================================
+# First run a quick build to generate the toolchain files in cache
+$LOCAL_BAZEL_OVERRIDE build @llvm_toolchain_15_0_7//:all --override_repository=llvm_toolchain_15_0_7_llvm=$LLVM_LOCAL 2>/dev/null || true
+
+# Copy generated toolchain and fix paths
+CACHE_DIR=$(find ~/.cache/bazel -type d -name "llvm_toolchain_15_0_7" 2>/dev/null | grep external | head -1)
+if [ -n "$CACHE_DIR" ]; then
+    mkdir -p "$REPOS_DIR/llvm_toolchain_15_0_7"
+    cp "$CACHE_DIR/BUILD.bazel" "$REPOS_DIR/llvm_toolchain_15_0_7/"
+    cp "$CACHE_DIR/WORKSPACE" "$REPOS_DIR/llvm_toolchain_15_0_7/"
+    cp "$CACHE_DIR/toolchains.bzl" "$REPOS_DIR/llvm_toolchain_15_0_7/"
+    mkdir -p "$REPOS_DIR/llvm_toolchain_15_0_7/bin"
+    mkdir -p "$REPOS_DIR/llvm_toolchain_15_0_7/lib"
+    cp "$CACHE_DIR/bin/cc_wrapper.sh" "$REPOS_DIR/llvm_toolchain_15_0_7/bin/"
+
+    # Fix paths in cc_wrapper.sh and BUILD.bazel
+    sed -i "s|$CACHE_DIR/../llvm_toolchain_15_0_7_llvm|$LLVM_LOCAL|g" "$REPOS_DIR/llvm_toolchain_15_0_7/bin/cc_wrapper.sh"
+    sed -i "s|$CACHE_DIR/../llvm_toolchain_15_0_7_llvm|$LLVM_LOCAL|g" "$REPOS_DIR/llvm_toolchain_15_0_7/BUILD.bazel"
+
+    # Add libc++ include path
+    sed -i 's|"additional_include_dirs": \[\]|"additional_include_dirs": ["/usr/include/c++/v1"]|g' "$REPOS_DIR/llvm_toolchain_15_0_7/BUILD.bazel"
+
+    # Create symlinks for tools
+    ln -sf "$LLVM_LOCAL/bin/clang-format" "$REPOS_DIR/llvm_toolchain_15_0_7/bin/clang-format"
+    ln -sf "$LLVM_LOCAL/bin/llvm-cov" "$REPOS_DIR/llvm_toolchain_15_0_7/bin/llvm-cov" 2>/dev/null || true
+    ln -sf "$LLVM_LOCAL/bin/llvm-symbolizer" "$REPOS_DIR/llvm_toolchain_15_0_7/bin/llvm-symbolizer" 2>/dev/null || true
+fi
+
+# ============================================================================
+# STEP 7: Create .bazelrc.local
+# ============================================================================
+cat > .bazelrc.local << 'EOF'
+# Use pre-fetched dependencies to avoid proxy issues with Java downloader
+build --distdir=/root/.cache/bazel-distdir
+fetch --distdir=/root/.cache/bazel-distdir
+query --distdir=/root/.cache/bazel-distdir
+
+# Repository overrides for blocked GitHub releases
+build --override_repository=llvm_toolchain_15_0_7_llvm=/tmp/llvm_local
+build --override_repository=llvm_toolchain_15_0_7=/tmp/bazel_repos/llvm_toolchain_15_0_7
+build --override_repository=build_bazel_rules_nodejs=/tmp/bazel_repos/build_bazel_rules_nodejs
+build --override_repository=rules_nodejs=/tmp/bazel_repos/rules_nodejs
+build --override_repository=platforms=/tmp/bazel_repos/platforms
+build --override_repository=bazel_skylib=/tmp/bazel_repos/bazel_skylib
+build --override_repository=io_bazel_rules_go=/tmp/bazel_repos/io_bazel_rules_go
+build --override_repository=aspect_bazel_lib=/tmp/bazel_repos/aspect_bazel_lib
+build --override_repository=rules_m4=/tmp/bazel_repos/rules_m4
+build --override_repository=rules_java=/tmp/bazel_repos/rules_java
+build --override_repository=rules_cc=/tmp/bazel_repos/rules_cc
+build --override_repository=rules_proto=/tmp/bazel_repos/rules_proto
+build --override_repository=rules_pkg=/tmp/bazel_repos/rules_pkg
+build --override_repository=prism=/tmp/bazel_repos/prism
+build --override_repository=bison_v3.3.2=/tmp/bazel_repos/bison_v3.3.2
+build --override_repository=m4_v1.4.18=/tmp/bazel_repos/m4_v1.4.18
+build --override_repository=ragel_v6.10=/tmp/bazel_repos/ragel_v6.10
+EOF
+
+# ============================================================================
+# STEP 8: Run Pre-fetch Script (optional but recommended)
+# ============================================================================
+mkdir -p ~/.cache/bazel-distdir
+python3 prefetch_deps_v2.py || true
+
+# ============================================================================
+# STEP 9: Build Sorbet
+# ============================================================================
+$LOCAL_BAZEL_OVERRIDE build //main:sorbet --config=dbg
+
+# ============================================================================
+# STEP 10: Test
+# ============================================================================
+./bazel-bin/main/sorbet --version
 ```
 
 ## What Works Through the Proxy
@@ -51,87 +235,69 @@ export LOCAL_BAZEL_OVERRIDE=~/.local/bin/bazel
 | URL Pattern | Status | Alternative |
 |-------------|--------|-------------|
 | `github.com/*/archive/*` | ✅ Works | - |
-| `github.com/*/releases/download/*` | ❌ Blocked (403) | Use mirrors or apt |
-| `storage.googleapis.com/*` | ✅ Works | - |
-| `mirror.bazel.build/*` | ⚠️ Partial | Some files available |
+| `codeload.github.com/*` | ✅ Works | Use for downloads |
+| `github.com/*/releases/download/*` | ❌ Blocked (403) | Use codeload or apt |
+| `storage.googleapis.com/*` | ✅ Works | Use for Bazel |
+| `ftp.gnu.org/*` | ❌ Blocked | Use apt packages |
 
-## Dependencies That Need Manual Handling
+## Key Insights
 
-These GitHub releases are blocked and need alternatives:
+### GitHub Releases vs Source Archives
+- **Releases** (`github.com/*/releases/download/*`) are blocked
+- **Source archives** (`codeload.github.com/*`) work fine
+- All Bazel dependencies can be downloaded via codeload
 
-```
-# From third_party/externals.bzl (blocked):
-- platforms-0.0.10.tar.gz (sha256: 218efe8ee736d26a...)
-- rules_go-v0.43.0.zip (sha256: d6ab6b57e48c0952...)
-- bazel-skylib-1.5.0.tar.gz (sha256: cd55a062e763b934...)
-- bazel-lib-v2.7.0.tar.gz (sha256: 357dad9d212327c3...)
-- rules_m4-v0.2.1.tar.xz (sha256: f59f75ac8a315d76...)
-- libprism-src.tar.gz (sha256: a643517b910c510c...)
+### System Package Substitutes
+Instead of downloading from GitHub releases:
+- **LLVM 15**: `apt install clang-15 lld-15 llvm-15 llvm-15-dev libc++-15-dev libc++abi-15-dev clang-format-15`
+- **Bison**: `apt install bison` (system version 3.8.2 works)
+- **M4**: Already installed on most systems
+- **Ragel**: `apt install ragel`
 
-# From emsdk/deps.bzl (blocked):
-- platforms-0.0.9.tar.gz (sha256: 5eda539c84126503...)
-- bazel-skylib-1.1.1.tar.gz (sha256: c6966ec828da198c...)
-- rules_nodejs-core-5.8.0.tar.gz (sha256: 08337d4fffc78f7f...)
-- rules_nodejs-5.8.0.tar.gz (sha256: dcc55f810142b6cf...)
-
-# LLVM toolchain (blocked):
-- clang+llvm-15.0.7-x86_64-linux-gnu-ubuntu-20.04.tar.xz (sha256: 3393c29279aea207...)
-```
-
-## LLVM BUILD.bazel Template
-
-If the Bazel cache doesn't have the BUILD file, create `/tmp/llvm_local/BUILD.bazel`:
-
-```python
-package(default_visibility = ["//visibility:public"])
-
-exports_files(glob(["bin/*", "lib/*", "include/*"]))
-
-filegroup(name = "clang", srcs = ["bin/clang", "bin/clang++", "bin/clang-cpp"])
-filegroup(name = "ld", srcs = ["bin/ld.lld", "bin/ld64.lld"])
-filegroup(name = "include", srcs = glob(["include/**/c++/**", "lib/clang/*/include/**"]))
-filegroup(name = "bin", srcs = glob(["bin/**"]))
-filegroup(name = "lib", srcs = glob(["lib/**/lib*.a", "lib/clang/*/lib/**/*.a", "lib/**/clang_rt.*.o"], exclude = ["lib/libLLVM*.a", "lib/libclang*.a", "lib/liblld*.a"]))
-filegroup(name = "ar", srcs = ["bin/llvm-ar"])
-filegroup(name = "as", srcs = ["bin/clang", "bin/llvm-as"])
-filegroup(name = "nm", srcs = ["bin/llvm-nm"])
-filegroup(name = "objcopy", srcs = ["bin/llvm-objcopy"])
-filegroup(name = "objdump", srcs = ["bin/llvm-objdump"])
-filegroup(name = "profdata", srcs = ["bin/llvm-profdata"])
-filegroup(name = "dwp", srcs = ["bin/llvm-dwp"])
-filegroup(name = "ranlib", srcs = ["bin/llvm-ranlib"])
-filegroup(name = "readelf", srcs = ["bin/llvm-readelf"])
-filegroup(name = "strip", srcs = ["bin/llvm-strip"])
-filegroup(name = "symbolizer", srcs = ["bin/llvm-symbolizer"])
-filegroup(name = "clang-tidy", srcs = ["bin/clang-tidy"])
+### Prism Special Handling
+The prism dependency expects pre-generated header files from the release tarball. Since we use the source archive, we must generate templates:
+```bash
+cd /tmp/bazel_repos/prism
+gem install rake-compiler
+ruby -S rake templates
 ```
 
 ## Troubleshooting
 
 ### "401 Unauthorized" from Bazel
-This is the core proxy issue. Use the scripts provided - they use curl which handles proxy auth correctly.
+Bazel's Java downloader can't handle authenticated proxies. Use curl-based downloads and `--override_repository`.
 
-### "Unable to tunnel through proxy"
-Same issue. Bazel's Java HTTP client can't authenticate to the proxy.
+### "'fstream' file not found"
+Missing libc++ headers. Install: `apt install libc++-15-dev libc++abi-15-dev`
 
-### Missing dependencies after prefetch
-Run `./fetch_all_deps.sh` which iteratively tries to build and downloads missing deps.
+### "unable to find library -l:libc++abi.a"
+Copy libc++ libraries to LLVM local:
+```bash
+cp /usr/lib/llvm-15/lib/libc++abi.a /tmp/llvm_local/lib/
+cp /usr/lib/x86_64-linux-gnu/libc++.a /tmp/llvm_local/lib/
+```
 
-### LLVM download fails
-Install via apt: `apt install clang-15 lld-15 llvm-15 llvm-15-dev` and use `--override_repository`.
+### "m4 subprocess failed"
+Update bison wrapper to set M4 environment variable:
+```bash
+export M4="/usr/bin/m4"
+```
 
-### Build fails with "no such package '@build_bazel_rules_nodejs//'"
-This is a transitive dep from emsdk. If you can't download it, you may need to get the files from another network and place them in `~/.cache/bazel-distdir/` with their SHA256 as filename.
+### "prism/diagnostic.h not found"
+Generate prism templates: `cd /tmp/bazel_repos/prism && ruby -S rake templates`
 
-## Files in This Repo
+## Files
 
-- `prefetch_deps_v2.py` - Downloads dependencies using curl to distdir
-- `fetch_all_deps.sh` - Iterative build script with LLVM override
-- `.bazelrc.local` - Local config for distdir (gitignored, create manually)
+- `.bazelrc.local` - Bazel configuration with all overrides
+- `prefetch_deps_v2.py` - Downloads dependencies using curl
+- `fetch_all_deps.sh` - Iterative build helper script
+- `PROXY_BUILD_INSTRUCTIONS.md` - This file
 
 ## Testing the Build
 
 ```bash
 ./bazel-bin/main/sorbet --version
-./bazel-bin/main/sorbet -e "42 + 'hello'"  # Should show type error
+# Expected: Sorbet typechecker 0.5.0 (non-release) debug_symbols=true clean=0 debug_mode=true
+
+./bazel-bin/main/sorbet --help | head -20
 ```
