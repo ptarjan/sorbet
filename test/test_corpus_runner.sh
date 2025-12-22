@@ -160,8 +160,10 @@ success "└─ exit code:   $code"
 shorten_bazel() {
   # Strip the full bazel cache path prefix to just leave bazel-out/...
   # This handles both the cache path format and the symlink format
+  # Also strip bazel runfiles paths (.runfiles/com_stripe_ruby_typer/)
   sed -e "s+/[^ ]*_bazel_[^/]*/[^ ]*/execroot/com_stripe_ruby_typer/++" \
-      -e "s+_bazel_$USER/[^ ]*com_stripe_ruby_typer/++"
+      -e "s+_bazel_$USER/[^ ]*com_stripe_ruby_typer/++" \
+      -e "s+bazel-out/[^ ]*.runfiles/com_stripe_ruby_typer/++"
 }
 
 something_failed=
