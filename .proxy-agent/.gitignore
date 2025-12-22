@@ -1,0 +1,4 @@
+# Ignore compiled Java files
+*.class
+*.jar
+MANIFEST.MF

@@ -1,0 +1,69 @@
+#!/bin/bash
+#
+# proxy-bazel
+# ===========
+# A wrapper script that runs Bazel with authenticated proxy support.
+#
+# This script:
+# 1. Starts a local forwarding proxy that authenticates to the upstream proxy
+# 2. Runs Bazel with the local proxy settings
+# 3. Cleans up the proxy on exit
+#
+# Usage:
+#   ./tools/proxy-bazel build //main:sorbet
+#   ./tools/proxy-bazel test //...
+#
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROXY_SCRIPT="$REPO_ROOT/.proxy-agent/auth_proxy.py"
+PROXY_PORT=18888
+PROXY_PID=""
+
+# Get the upstream proxy URL from environment
+UPSTREAM_PROXY="${HTTPS_PROXY:-${https_proxy:-}}"
+
+if [ -z "$UPSTREAM_PROXY" ]; then
+    echo "No HTTPS_PROXY set, running bazel directly..." >&2
+    exec "$REPO_ROOT/bazel" "$@"
+fi
+
+# Check if the proxy URL contains authentication credentials
+if [[ "$UPSTREAM_PROXY" != *"@"* ]]; then
+    echo "HTTPS_PROXY doesn't contain credentials, running bazel directly..." >&2
+    exec "$REPO_ROOT/bazel" "$@"
+fi
+
+# Function to cleanup on exit
+cleanup() {
+    if [ -n "$PROXY_PID" ] && ps -p "$PROXY_PID" > /dev/null 2>&1; then
+        kill "$PROXY_PID" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT
+
+# Check if proxy is already running on the port
+if lsof -i ":$PROXY_PORT" > /dev/null 2>&1; then
+    echo "Auth proxy already running on port $PROXY_PORT" >&2
+else
+    # Start the auth proxy
+    echo "Starting auth proxy on port $PROXY_PORT..." >&2
+    UPSTREAM_PROXY="$UPSTREAM_PROXY" python3 "$PROXY_SCRIPT" &
+    PROXY_PID=$!
+    sleep 2
+
+    if ! ps -p "$PROXY_PID" > /dev/null 2>&1; then
+        echo "Failed to start auth proxy" >&2
+        exit 1
+    fi
+fi
+
+# Run bazel with the local proxy
+export HTTPS_PROXY="http://127.0.0.1:$PROXY_PORT"
+export HTTP_PROXY="http://127.0.0.1:$PROXY_PORT"
+export https_proxy="http://127.0.0.1:$PROXY_PORT"
+export http_proxy="http://127.0.0.1:$PROXY_PORT"
+
+exec "$SCRIPT_DIR/bazel" "$@"
