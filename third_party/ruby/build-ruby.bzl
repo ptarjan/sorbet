@@ -252,6 +252,16 @@ find ccan -type f -name \\*.h | while read file; do
   cp $file "$internal_incdir/$file"
 done
 
+# Copy internal/ directory if it exists (Ruby 3.0+)
+if [[ -d "internal" ]]; then
+  find internal -type d | while read dir; do
+    mkdir -p "$internal_incdir/$dir"
+  done
+  find internal -type f -name \\*.h | while read file; do
+    cp $file "$internal_incdir/$file"
+  done
+fi
+
 # Put the installed ruby into our path to run gem commands
 export PATH="$out_dir/bin:$PATH"
 

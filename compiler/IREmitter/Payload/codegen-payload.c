@@ -12,6 +12,14 @@
 // This is probably a bad idea but is needed for so many things
 #include "vm_core.h"
 
+// Ruby 3.0+ internal headers for hash, fixnum, object, numeric, variable internals
+#include "internal/hash.h"
+#include "internal/fixnum.h"
+#include "internal/object.h"
+#include "internal/numeric.h"
+#include "internal/variable.h"
+#include "vm_callinfo.h"
+
 #define SORBET_ATTRIBUTE(...) __attribute__((__VA_ARGS__))
 #define SORBET_INLINE __attribute__((always_inline))
 
@@ -552,12 +560,14 @@ VALUE sorbet_singleton_class(VALUE klass) {
 
 SORBET_INLINE
 VALUE sorbet_globalVariableGet(ID name) {
-    return rb_gvar_get(rb_global_entry(name));
+    // In Ruby 3.0+, rb_gvar_get takes an ID directly
+    return rb_gvar_get(name);
 }
 
 SORBET_INLINE
 void sorbet_globalVariableSet(ID name, VALUE newValue) {
-    rb_gvar_set(rb_global_entry(name), newValue);
+    // In Ruby 3.0+, rb_gvar_set takes (ID, VALUE) directly
+    rb_gvar_set(name, newValue);
 }
 
 SORBET_INLINE
@@ -2705,7 +2715,10 @@ bool sorbet_isCachedMethod(struct FunctionInlineCache *cache, VALUE (*expectedFn
     // Assumes that the cache is already up-to-date. If you haven't done this
     // yourself, call: `sorbet_vmMethodSearch(cache, recv)`
 
-    rb_method_definition_t *def = cache->cd.cc.me->def;
+    // Ruby 3.0: cc is a pointer, use vm_cc_cme() to get the method entry
+    const rb_callable_method_entry_t *cme = vm_cc_cme(cache->cd.cc);
+    if (!cme) return false;
+    rb_method_definition_t *def = cme->def;
     return (def->type == VM_METHOD_TYPE_CFUNC) && (def->body.cfunc.func == expectedFnPtr);
 }
 
@@ -2713,14 +2726,16 @@ SORBET_INLINE
 VALUE sorbet_callFuncDirect(struct FunctionInlineCache *cache, rb_sorbet_func_t methodPtr, int argc, VALUE *argv,
                             VALUE recv, rb_iseq_t *iseq) {
     // we need a method entry from the call data to be able to setup the stack correctly.
-    if (UNLIKELY(cache->cd.cc.me == NULL)) {
+    // Ruby 3.0: cc is a pointer, use vm_cc_cme() to check if it's set
+    if (UNLIKELY(vm_cc_cme(cache->cd.cc) == NULL)) {
         sorbet_vmMethodSearch(cache, recv);
     }
 
     rb_control_frame_t *cfp = sorbet_pushCfuncFrame(cache, recv, iseq);
     struct rb_calling_info calling;
     calling.block_handler = VM_BLOCK_HANDLER_NONE;
-    calling.kw_splat = (cache->cd.ci_kw.ci.flag & VM_CALL_KW_SPLAT) > 0;
+    // Ruby 3.0: use vm_ci_flag to get call info flags
+    calling.kw_splat = (vm_ci_flag(cache->cd.ci) & VM_CALL_KW_SPLAT) > 0;
     calling.recv = recv;
     calling.argc = argc;
     VALUE res = methodPtr(argc, argv, recv, cfp, &calling, &cache->cd);
