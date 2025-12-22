@@ -103,16 +103,33 @@ bool TypeSyntax::isSig(core::Context ctx, const ast::Send &send) {
         return false;
     }
 
-    if (send.numPosArgs() > 1) {
-        return false;
+    // Original format: receiver.sig { ... } where receiver is self or T::Sig::WithoutRuntime
+    if (send.numPosArgs() == 0 || send.numPosArgs() == 1) {
+        if (send.recv.isSelfReference()) {
+            return true;
+        }
+
+        if (auto recv = ast::cast_tree<ast::ConstantLit>(send.recv)) {
+            if (recv->symbol() == core::Symbols::T_Sig_WithoutRuntime()) {
+                return true;
+            }
+        }
     }
 
-    if (send.recv.isSelfReference()) {
-        return true;
-    }
-
-    if (auto recv = ast::cast_tree<ast::ConstantLit>(send.recv)) {
-        return recv->symbol() == core::Symbols::T_Sig_WithoutRuntime();
+    // Rewritten format: Sorbet::Private::Static.sig(receiver) { ... }
+    // where receiver (arg0) is self or T::Sig::WithoutRuntime
+    if (send.numPosArgs() == 1 || send.numPosArgs() == 2) {
+        if (auto recv = ast::cast_tree<ast::ConstantLit>(send.recv)) {
+            if (recv->symbol() == core::Symbols::Sorbet_Private_Static()) {
+                auto arg0 = send.getPosArg(0);
+                if (arg0.isSelfReference()) {
+                    return true;
+                }
+                if (auto argRecv = ast::cast_tree<ast::ConstantLit>(arg0)) {
+                    return argRecv->symbol() == core::Symbols::T_Sig_WithoutRuntime();
+                }
+            }
+        }
     }
 
     return false;
