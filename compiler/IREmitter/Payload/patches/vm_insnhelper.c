@@ -22,8 +22,10 @@ void sorbet_setExceptionStackFrame(rb_execution_context_t *ec, rb_control_frame_
     cfp->sp[0] = rb_errinfo();
 
     // NOTE: there's no explicit check for stack overflow, because `vm_push_frame` will do that check
-    cfp = vm_push_frame(ec, iseq, VM_FRAME_MAGIC_RESCUE, self, blockHandler, me, iseq->body->iseq_encoded, sp,
-                        num_locals, iseq->body->stack_max);
+    // In Ruby 3.0, vm_push_frame returns void
+    vm_push_frame(ec, iseq, VM_FRAME_MAGIC_RESCUE, self, blockHandler, me, iseq->body->iseq_encoded, sp,
+                  num_locals, iseq->body->stack_max);
+    cfp = ec->cfp;
 
     // This mirrors what the Ruby VM does for rescue frames:
     // https://github.com/ruby/ruby/blob/a9a48e6a741f048766a2a287592098c4f6c7b7c7/vm.c#L2094-L2105
@@ -40,7 +42,9 @@ rb_control_frame_t *sorbet_pushStaticInitFrame(VALUE recv) {
     // TODO(trevor) we could pass this in to supply a block
     VALUE block_handler = VM_BLOCK_HANDLER_NONE;
 
-    return vm_push_frame(ec, NULL, frame_type, recv, block_handler, cref, 0, ec->cfp->sp, 0, 0);
+    // In Ruby 3.0, vm_push_frame returns void
+    vm_push_frame(ec, NULL, frame_type, recv, block_handler, cref, 0, ec->cfp->sp, 0, 0);
+    return ec->cfp;
 }
 
 rb_control_frame_t *sorbet_pushCfuncFrame(struct FunctionInlineCache *cache, VALUE recv, const rb_iseq_t *iseq) {
@@ -54,8 +58,10 @@ rb_control_frame_t *sorbet_pushCfuncFrame(struct FunctionInlineCache *cache, VAL
     VALUE block_handler = VM_BLOCK_HANDLER_NONE;
 
     /* cf. vm_call_sorbet_with_frame_normal */
-    return vm_push_frame(ec, iseq, frame_type, recv, block_handler, (VALUE)me, 0, ec->cfp->sp,
-                         iseq->body->local_table_size, iseq->body->stack_max);
+    // In Ruby 3.0, vm_push_frame returns void
+    vm_push_frame(ec, iseq, frame_type, recv, block_handler, (VALUE)me, 0, ec->cfp->sp,
+                  iseq->body->local_table_size, iseq->body->stack_max);
+    return ec->cfp;
 }
 
 void sorbet_pushBlockFrame(const struct rb_captured_block *captured) {
@@ -146,7 +152,7 @@ void sorbet_vmMethodSearch(struct FunctionInlineCache *cache, VALUE recv) {
 // https://github.com/ruby/ruby/blob/5445e0435260b449decf2ac16f9d09bae3cafe72/vm_insnhelper.c#L2683-L2691
 // The wrapper catches TAG_RETURN jumps (from return statements inside lambdas), and handles appropriately.
 static VALUE sorbet_vm_call_opt_call(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp,
-                                     struct rb_calling_info *calling, struct rb_call_data *cd) {
+                                     struct rb_calling_info *calling) {
     enum ruby_tag_type state;
     VALUE retval;
     rb_control_frame_t *const volatile save_cfp = ec->cfp;
@@ -158,7 +164,7 @@ static VALUE sorbet_vm_call_opt_call(rb_execution_context_t *ec, rb_control_fram
     // If EC_EXEC_TAG() returns 0, the tag has just been set (including setjmp), and we continue with a call to
     // vm_call_opt_call.
     if ((state = EC_EXEC_TAG()) == 0) {
-        retval = vm_call_opt_call(ec, reg_cfp, calling, cd);
+        retval = vm_call_opt_call(ec, reg_cfp, calling);
     }
     // If EC_EXEC_TAG() returns TAG_RETURN, we have caught a longjmp (via EC_JUMP_TAG) from someone below us in the
     // call stack indicating they would like to do a non-local 'return'. We need to examine the vm_throw_data to decide
@@ -208,9 +214,9 @@ static VALUE sorbet_vm_call_opt_call(rb_execution_context_t *ec, rb_control_fram
 // `vm_call0_body` for refined methods,
 // https://github.com/ruby/ruby/blob/5445e0435260b449decf2ac16f9d09bae3cafe72/vm_insnhelper.c#L2911-L2993
 static VALUE sorbet_vm_call_method_each_type(rb_execution_context_t *ec, rb_control_frame_t *cfp,
-                                             struct rb_calling_info *calling, struct rb_call_data *cd) {
-    const struct rb_callinfo *ci = cd->ci;
-    const struct rb_callcache *cc = cd->cc;
+                                             struct rb_calling_info *calling) {
+    const struct rb_callinfo *ci = calling->ci;
+    const struct rb_callcache *cc = calling->cc;
 
 // begin differences from vm_call_method_each_type
 again:
@@ -219,29 +225,27 @@ again:
     switch (vm_cc_cme(cc)->def->type) {
         case VM_METHOD_TYPE_ISEQ:
             CC_SET_FASTPATH(cc, vm_call_iseq_setup, TRUE);
-            return vm_call_iseq_setup(ec, cfp, calling, cd);
+            return vm_call_iseq_setup(ec, cfp, calling);
 
         case VM_METHOD_TYPE_NOTIMPLEMENTED:
         case VM_METHOD_TYPE_CFUNC:
             CC_SET_FASTPATH(cc, vm_call_cfunc, TRUE);
-            return vm_call_cfunc(ec, cfp, calling, cd);
+            return vm_call_cfunc(ec, cfp, calling);
 
         case VM_METHOD_TYPE_SORBET:
             CC_SET_FASTPATH(cc, vm_call_sorbet, TRUE);
-            return vm_call_sorbet_maybe_setup_fastpath(ec, cfp, calling, cd);
+            return vm_call_sorbet_maybe_setup_fastpath(ec, cfp, calling);
 
         case VM_METHOD_TYPE_ATTRSET:
             CALLER_SETUP_ARG(cfp, calling, ci);
-            if (calling->argc == 1 && calling->kw_splat && RHASH_EMPTY_P(cfp->sp[-1])) {
-                rb_warn_keyword_to_last_hash(ec, calling, ci, NULL);
-            } else {
-                CALLER_REMOVE_EMPTY_KW_SPLAT(cfp, calling, ci);
-            }
+            /* In Ruby 3.0, keyword argument warnings were removed, so we just use
+               CALLER_REMOVE_EMPTY_KW_SPLAT unconditionally */
+            CALLER_REMOVE_EMPTY_KW_SPLAT(cfp, calling, ci);
 
             rb_check_arity(calling->argc, 1, 1);
             vm_cc_attr_index_set(cc, 0);
             CC_SET_FASTPATH(cc, vm_call_attrset, !((vm_ci_flag(ci) & VM_CALL_ARGS_SPLAT) || (vm_ci_flag(ci) & VM_CALL_KWARG)));
-            return vm_call_attrset(ec, cfp, calling, cd);
+            return vm_call_attrset(ec, cfp, calling);
 
         case VM_METHOD_TYPE_IVAR:
             CALLER_SETUP_ARG(cfp, calling, ci);
@@ -249,40 +253,40 @@ again:
             rb_check_arity(calling->argc, 0, 0);
             vm_cc_attr_index_set(cc, 0);
             CC_SET_FASTPATH(cc, vm_call_ivar, !(vm_ci_flag(ci) & VM_CALL_ARGS_SPLAT));
-            return vm_call_ivar(ec, cfp, calling, cd);
+            return vm_call_ivar(ec, cfp, calling);
 
         case VM_METHOD_TYPE_MISSING:
             vm_cc_method_missing_reason_set(cc, 0);
             CC_SET_FASTPATH(cc, vm_call_method_missing, TRUE);
-            return vm_call_method_missing(ec, cfp, calling, cd);
+            return vm_call_method_missing(ec, cfp, calling);
 
         case VM_METHOD_TYPE_BMETHOD:
             CC_SET_FASTPATH(cc, vm_call_bmethod, TRUE);
-            return vm_call_bmethod(ec, cfp, calling, cd);
+            return vm_call_bmethod(ec, cfp, calling);
 
         case VM_METHOD_TYPE_ALIAS: {
             const rb_callable_method_entry_t *cme = vm_cc_cme(cc);
             cme = aliased_callable_method_entry(cme);
             VM_ASSERT(cme != NULL);
             // In Ruby 3.0, we need to search for the method again with the aliased method
-            return vm_call_alias(ec, cfp, calling, cd);
+            return vm_call_alias(ec, cfp, calling);
         }
 
         case VM_METHOD_TYPE_OPTIMIZED:
             switch (vm_cc_cme(cc)->def->body.optimize_type) {
                 case OPTIMIZED_METHOD_TYPE_SEND:
                     CC_SET_FASTPATH(cc, vm_call_opt_send, TRUE);
-                    return vm_call_opt_send(ec, cfp, calling, cd);
+                    return vm_call_opt_send(ec, cfp, calling);
                 case OPTIMIZED_METHOD_TYPE_CALL:
                     // begin differences from vm_call_method_each_type
                     // We use a patched version of sorbet_vm_call_opt_call which catches and handles returns from
                     // lambdas.
                     CC_SET_FASTPATH(cc, sorbet_vm_call_opt_call, TRUE);
-                    return sorbet_vm_call_opt_call(ec, cfp, calling, cd);
+                    return sorbet_vm_call_opt_call(ec, cfp, calling);
                     // end differences from vm_call_method_each_type
                 case OPTIMIZED_METHOD_TYPE_BLOCK_CALL:
                     CC_SET_FASTPATH(cc, vm_call_opt_block_call, TRUE);
-                    return vm_call_opt_block_call(ec, cfp, calling, cd);
+                    return vm_call_opt_block_call(ec, cfp, calling);
                 default:
                     rb_bug("vm_call_method: unsupported optimized method type (%d)", vm_cc_cme(cc)->def->body.optimize_type);
             }
@@ -291,7 +295,7 @@ again:
             break;
 
         case VM_METHOD_TYPE_ZSUPER:
-            return vm_call_zsuper(ec, cfp, calling, cd, RCLASS_ORIGIN(vm_cc_cme(cc)->defined_class));
+            return vm_call_zsuper(ec, cfp, calling, RCLASS_ORIGIN(vm_cc_cme(cc)->defined_class));
 
         case VM_METHOD_TYPE_REFINED: {
             // begin differences from vm_call_method_each_type
@@ -306,7 +310,7 @@ again:
             if (cme->def->body.refined.orig_me) {
                 cme = refined_method_callable_without_refinement(cme);
                 // In Ruby 3.0, we need to do a new method search
-                return vm_call_refined(ec, cfp, calling, cd);
+                return vm_call_refined(ec, cfp, calling);
             }
 
             VALUE super_class = RCLASS_SUPER(cme->defined_class);
@@ -315,14 +319,14 @@ again:
                 if (super_cme) {
                     RUBY_VM_CHECK_INTS(ec);
                     // In Ruby 3.0, we delegate to vm_call_refined which handles this
-                    return vm_call_refined(ec, cfp, calling, cd);
+                    return vm_call_refined(ec, cfp, calling);
                 }
             }
 
             // We call vm_call_method_nome instead of `missing_method` like `vm_call0_body`.
             // This matches the behavior of vm_call_method_each_type:
             // https://github.com/ruby/ruby/blob/5445e0435260b449decf2ac16f9d09bae3cafe72/vm_insnhelper.c#L2989
-            return vm_call_method_nome(ec, cfp, calling, cd);
+            return vm_call_method_nome(ec, cfp, calling);
 
             // end differences from vm_call_method_each_type
         }
@@ -334,9 +338,9 @@ again:
 // This is a version of vm_call_method that dispatches to `sorbet_vm_call_method_each_type` instead.
 // https://github.com/ruby/ruby/blob/5445e0435260b449decf2ac16f9d09bae3cafe72/vm_insnhelper.c#L3017-L3070
 static inline VALUE sorbet_vm_call_method(rb_execution_context_t *ec, rb_control_frame_t *cfp,
-                                          struct rb_calling_info *calling, struct rb_call_data *cd) {
-    const struct rb_callinfo *ci = cd->ci;
-    const struct rb_callcache *cc = cd->cc;
+                                          struct rb_calling_info *calling) {
+    const struct rb_callinfo *ci = calling->ci;
+    const struct rb_callcache *cc = calling->cc;
     const rb_callable_method_entry_t *cme = vm_cc_cme(cc);
 
     VM_ASSERT(callable_method_entry_p(cme));
@@ -345,7 +349,7 @@ static inline VALUE sorbet_vm_call_method(rb_execution_context_t *ec, rb_control
         switch (METHOD_ENTRY_VISI(cme)) {
             case METHOD_VISI_PUBLIC: /* likely */
                 // begin differences from vm_call_method_each_type
-                return sorbet_vm_call_method_each_type(ec, cfp, calling, cd);
+                return sorbet_vm_call_method_each_type(ec, cfp, calling);
                 // begin differences from vm_call_method_each_type
 
             case METHOD_VISI_PRIVATE:
@@ -356,36 +360,35 @@ static inline VALUE sorbet_vm_call_method(rb_execution_context_t *ec, rb_control
 
                     vm_cc_method_missing_reason_set(cc, stat);
                     CC_SET_FASTPATH(cc, vm_call_method_missing, TRUE);
-                    return vm_call_method_missing(ec, cfp, calling, cd);
+                    return vm_call_method_missing(ec, cfp, calling);
                 }
                 // begin differences from vm_call_method_each_type
-                return sorbet_vm_call_method_each_type(ec, cfp, calling, cd);
+                return sorbet_vm_call_method_each_type(ec, cfp, calling);
                 // end differences from vm_call_method_each_type
 
             case METHOD_VISI_PROTECTED:
                 if (!(vm_ci_flag(ci) & VM_CALL_OPT_SEND)) {
                     if (!rb_obj_is_kind_of(cfp->self, cme->defined_class)) {
                         vm_cc_method_missing_reason_set(cc, MISSING_PROTECTED);
-                        return vm_call_method_missing(ec, cfp, calling, cd);
+                        return vm_call_method_missing(ec, cfp, calling);
                     } else {
                         /* caching method info to dummy cc */
                         VM_ASSERT(cme != NULL);
-                        // In Ruby 3.0, rb_call_data uses pointers, so we can just use cd directly
-                        struct rb_call_data cd_entry = *cd;
+                        // In Ruby 3.0, calling already has ci and cc pointers
                         // begin differences from vm_call_method_each_type
-                        return sorbet_vm_call_method_each_type(ec, cfp, calling, &cd_entry);
+                        return sorbet_vm_call_method_each_type(ec, cfp, calling);
                         // end differences from vm_call_method_each_type
                     }
                 }
                 // begin differences from vm_call_method_each_type
-                return sorbet_vm_call_method_each_type(ec, cfp, calling, cd);
+                return sorbet_vm_call_method_each_type(ec, cfp, calling);
                 // end differences from vm_call_method_each_type
 
             default:
                 rb_bug("unreachable");
         }
     } else {
-        return vm_call_method_nome(ec, cfp, calling, cd);
+        return vm_call_method_nome(ec, cfp, calling);
     }
 }
 
@@ -394,10 +397,9 @@ static inline VALUE sorbet_vm_call_method(rb_execution_context_t *ec, rb_control
 // https://github.com/ruby/ruby/blob/5445e0435260b449decf2ac16f9d09bae3cafe72/vm_insnhelper.c#L3998-L4056
 static inline VALUE sorbet_vm_sendish(struct rb_execution_context_struct *ec, struct rb_control_frame_struct *reg_cfp,
                                       struct rb_call_data *cd, VALUE block_handler) {
-    CALL_INFO ci = &cd->ci;
-    CALL_CACHE cc = &cd->cc;
+    const struct rb_callinfo *ci = cd->ci;
     VALUE val;
-    int argc = ci->orig_argc;
+    int argc = vm_ci_argc(ci);
     VALUE recv = TOPN(argc);
     struct rb_calling_info calling;
 
@@ -407,16 +409,22 @@ static inline VALUE sorbet_vm_sendish(struct rb_execution_context_struct *ec, st
     calling.argc = argc;
 
     // inlined instead of called via vm_search_method_wrap
-    vm_search_method(cd, recv);
+    // In Ruby 3.0, vm_search_method takes 3 args: cd_owner, cd, recv
+    vm_search_method(Qundef, cd, recv);
+
+    // In Ruby 3.0, calling gets ci and cc from the call data
+    calling.ci = cd->ci;
+    calling.cc = cd->cc;
 
     // We need to avoid using `vm_call_general`, and instead call `sorbet_vm_call_general`. See the comments in
     // `sorbet_vm_call_method_each_type` for more information.
     //
     // Uses UNLIKELY to make the fast path of "call cache hit" faster
-    if (UNLIKELY(cc->call == vm_call_general)) {
-        val = sorbet_vm_call_method(ec, GET_CFP(), &calling, cd);
+    // In Ruby 3.0, we check if the call cache handler is vm_call_general
+    if (UNLIKELY(vm_cc_call(cd->cc) == vm_call_general)) {
+        val = sorbet_vm_call_method(ec, GET_CFP(), &calling);
     } else {
-        val = cc->call(ec, GET_CFP(), &calling, cd);
+        val = vm_cc_call(cd->cc)(ec, GET_CFP(), &calling);
     }
 
     if (val != Qundef) {
@@ -431,10 +439,9 @@ static inline VALUE sorbet_vm_sendish(struct rb_execution_context_struct *ec, st
 static inline VALUE sorbet_vm_sendish_super(struct rb_execution_context_struct *ec,
                                             struct rb_control_frame_struct *reg_cfp, struct rb_call_data *cd,
                                             VALUE block_handler) {
-    CALL_INFO ci = &cd->ci;
-    CALL_CACHE cc = &cd->cc;
+    const struct rb_callinfo *ci = cd->ci;
     VALUE val;
-    int argc = ci->orig_argc;
+    int argc = vm_ci_argc(ci);
     VALUE recv = TOPN(argc);
     struct rb_calling_info calling;
 
@@ -446,14 +453,19 @@ static inline VALUE sorbet_vm_sendish_super(struct rb_execution_context_struct *
     // inlined instead of called via vm_search_method_wrap
     vm_search_super_method(reg_cfp, cd, recv);
 
+    // In Ruby 3.0, calling gets ci and cc from the call data
+    calling.ci = cd->ci;
+    calling.cc = cd->cc;
+
     // We need to avoid using `vm_call_general`, and instead call `sorbet_vm_call_general`. See the comments in
     // `sorbet_vm_call_method_each_type` for more information.
     //
     // Uses UNLIKELY to make the fast path of "call cache hit" faster
-    if (UNLIKELY(cc->call == vm_call_general)) {
-        val = sorbet_vm_call_method(ec, GET_CFP(), &calling, cd);
+    // In Ruby 3.0, we check if the call cache handler is vm_call_general
+    if (UNLIKELY(vm_cc_call(cd->cc) == vm_call_general)) {
+        val = sorbet_vm_call_method(ec, GET_CFP(), &calling);
     } else {
-        val = cc->call(ec, GET_CFP(), &calling, cd);
+        val = vm_cc_call(cd->cc)(ec, GET_CFP(), &calling);
     }
 
     if (val != Qundef) {
@@ -528,16 +540,18 @@ VALUE sorbet_vm_check_match_array(rb_execution_context_t *ec, VALUE target, VALU
 
 VALUE sorbet_vm_getivar(VALUE obj, ID id, IVC ic) {
     /* cf. getinstancevariable in insns.def and vm_getinstancevariable */
-    struct rb_call_cache *cc = 0;
+    /* In Ruby 3.0, vm_getivar signature is: (obj, id, iseq, ic, cc, is_attr) */
+    const struct rb_callcache *cc = NULL;
     int is_attr = 0;
-    return vm_getivar(obj, id, ic, cc, is_attr);
+    return vm_getivar(obj, id, NULL, ic, cc, is_attr);
 }
 
 void sorbet_vm_setivar(VALUE obj, ID id, VALUE val, IVC ic) {
     /* cf. setinstancevariable in insns.def and vm_setinstancevariable */
-    struct rb_call_cache *cc = 0;
+    /* In Ruby 3.0, vm_setivar signature is: (obj, id, val, iseq, ic, cc, is_attr) */
+    const struct rb_callcache *cc = NULL;
     int is_attr = 0;
-    vm_setivar(obj, id, val, ic, cc, is_attr);
+    vm_setivar(obj, id, val, NULL, ic, cc, is_attr);
 }
 
 void sorbet_throwReturn(rb_execution_context_t *ec, VALUE retval) {

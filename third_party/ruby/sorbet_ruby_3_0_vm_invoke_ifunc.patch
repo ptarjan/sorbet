@@ -1,0 +1,22 @@
+diff -ruN a/vm_insnhelper.c b/vm_insnhelper.c
+--- a/vm_insnhelper.c	2024-04-23 10:23:26.000000000 +0000
++++ b/vm_insnhelper.c	2025-12-22 00:18:11.357282031 +0000
+@@ -3882,6 +3882,16 @@ vm_invoke_ifunc_block(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp,
+     CALLER_REMOVE_EMPTY_KW_SPLAT(ec->cfp, calling, ci);
+     argc = calling->argc;
+-    val = vm_yield_with_cfunc(ec, captured, captured->self, argc, STACK_ADDR_FROM_TOP(argc), calling->kw_splat, calling->block_handler, NULL);
+-    POPN(argc); /* TODO: should put before C/yield? */
++    /*
++     * We need to pop the arguments before calling vm_yield_with_cfunc,
++     * and tell it where the args are via args_on_stack = TRUE.
++     * This is needed because vm_yield_with_cfunc may push a new frame
++     * and the args need to be at the right location relative to the stack.
++     */
++    POPN(argc);
++    const VALUE *argv = STACK_ADDR_FROM_TOP(0);
++    bool args_on_stack = (argv != NULL);
++    val = vm_yield_with_cfunc(ec, captured, captured->self, argc, argv, calling->kw_splat, calling->block_handler, is_lambda, NULL, args_on_stack);
++    /* Note: POPN was already done above, so we don't need to pop again here.
++       The original Ruby code had: POPN(argc); after the call. */
+     return val;
+ }

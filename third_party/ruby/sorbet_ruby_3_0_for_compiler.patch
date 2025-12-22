@@ -191,15 +191,6 @@ diff -ruN '--exclude=*.orig' a/method.h b/method.h
  void rb_add_method_iseq(VALUE klass, ID mid, const rb_iseq_t *iseq, rb_cref_t *cref, rb_method_visibility_t visi);
  void rb_add_refined_method_entry(VALUE refined_class, ID mid);
  void rb_add_method(VALUE klass, ID mid, rb_method_type_t type, void *option, rb_method_visibility_t visi);
-@@ -236,6 +326,8 @@
- 
- void rb_method_table_insert(VALUE klass, struct rb_id_table *table, ID method_id, const rb_method_entry_t *me);
- 
-+void rb_method_table_insert(VALUE klass, struct rb_id_table *table, ID method_id, const rb_method_entry_t *me);
-+
- void rb_scope_visibility_set(rb_method_visibility_t);
- 
- VALUE rb_unnamed_parameters(int arity);
 diff -ruN '--exclude=*.orig' a/proc.c b/proc.c
 --- a/proc.c	2024-04-23 10:23:26.000000000 +0000
 +++ b/proc.c	2025-12-22 00:18:07.926230057 +0000
@@ -426,7 +417,7 @@ diff -ruN '--exclude=*.orig' a/vm_backtrace.c b/vm_backtrace.c
 diff -ruN '--exclude=*.orig' a/vm_eval.c b/vm_eval.c
 --- a/vm_eval.c	2024-04-23 10:23:26.000000000 +0000
 +++ b/vm_eval.c	2025-12-22 00:18:11.088277956 +0000
-@@ -149,6 +149,61 @@
+@@ -149,6 +149,57 @@
      return vm_call0_cfunc_with_frame(ec, calling, argv);
  }
  
@@ -447,16 +438,10 @@ diff -ruN '--exclude=*.orig' a/vm_eval.c b/vm_eval.c
 +     * We do not set VM_FRAME_MAGIC_CFRAME because we do maintain local variables that can
 +     * be accessed by Binding#local_variables and that need to be accessed by blocks/closures.
 +     */
-+    int frame_flags = VM_FRAME_MAGIC_CFUNC | VM_ENV_FLAG_LOCAL;
++    int frame_flags = VM_FRAME_MAGIC_CFUNC | VM_FRAME_FLAG_CFRAME | VM_ENV_FLAG_LOCAL;
 +
 +    if (calling->kw_splat) {
-+        if (argc > 0 && RB_TYPE_P(argv[argc-1], T_HASH) && RHASH_EMPTY_P(argv[argc-1])) {
-+            frame_flags |= VM_FRAME_FLAG_CFRAME_EMPTY_KW;
-+            argc--;
-+        }
-+        else {
-+            frame_flags |= VM_FRAME_FLAG_CFRAME_KW;
-+        }
++        frame_flags |= VM_FRAME_FLAG_CFRAME_KW;
 +    }
 +
 +    RUBY_DTRACE_CMETHOD_ENTRY_HOOK(ec, me->owner, me->def->original_id);
@@ -464,9 +449,10 @@ diff -ruN '--exclude=*.orig' a/vm_eval.c b/vm_eval.c
 +    {
 +	rb_control_frame_t *reg_cfp = ec->cfp;
 +
-+        rb_control_frame_t *new_cfp = vm_push_frame(ec, sorbet->iseqptr, frame_flags, recv,
-+                                                    block_handler, (VALUE)me,
-+                                                    0, reg_cfp->sp, sorbet->iseqptr->body->local_table_size, sorbet->iseqptr->body->stack_max);
++        vm_push_frame(ec, sorbet->iseqptr, frame_flags, recv,
++                      block_handler, (VALUE)me,
++                      0, reg_cfp->sp, sorbet->iseqptr->body->local_table_size, sorbet->iseqptr->body->stack_max);
++        rb_control_frame_t *new_cfp = ec->cfp;
 +
 +        val = (*sorbet->func)(argc, argv, recv, new_cfp, calling, cd);
 +
@@ -480,20 +466,21 @@ diff -ruN '--exclude=*.orig' a/vm_eval.c b/vm_eval.c
 +}
 +
 +static VALUE
-+vm_call0_sorbet(rb_execution_context_t *ec, struct rb_calling_info *calling, struct rb_call_data *cd, const VALUE *argv)
++vm_call0_sorbet(rb_execution_context_t *ec, struct rb_calling_info *calling, const VALUE *argv)
 +{
-+    return vm_call0_sorbet_with_frame(ec, calling, cd, argv);
++    struct rb_call_data cd = { .ci = calling->ci, .cc = calling->cc };
++    return vm_call0_sorbet_with_frame(ec, calling, &cd, argv);
 +}
 +
  /* `ci' should point temporal value (on stack value) */
  static VALUE
  vm_call0_body(rb_execution_context_t *ec, struct rb_calling_info *calling, const VALUE *argv)
-@@ -179,6 +234,9 @@
+@@ -179,6 +230,9 @@
        case VM_METHOD_TYPE_CFUNC:
          ret = vm_call0_cfunc(ec, calling, argv);
  	goto success;
 +      case VM_METHOD_TYPE_SORBET:
-+        ret = vm_call0_sorbet(ec, calling, cd, argv);
++        ret = vm_call0_sorbet(ec, calling, argv);
 +        goto success;
        case VM_METHOD_TYPE_ATTRSET:
          if (calling->kw_splat &&
@@ -509,7 +496,7 @@ diff -ruN '--exclude=*.orig' a/vm_insnhelper.c b/vm_insnhelper.c
  # undef METHOD_BUG
        default:
  	rb_bug("wrong method type: %d", me->def->type);
-@@ -2958,6 +2959,571 @@
+@@ -2958,6 +2959,593 @@
      return vm_getivar(calling->recv, vm_cc_cme(cc)->def->body.attr.id, NULL, NULL, cc, TRUE);
  }
  
@@ -624,23 +611,19 @@ diff -ruN '--exclude=*.orig' a/vm_insnhelper.c b/vm_insnhelper.c
 +     * We do not set VM_FRAME_MAGIC_CFRAME because we do maintain local variables that can
 +     * be accessed by Binding#local_variables and that need to be accessed by blocks/closures.
 +     */
-+    VALUE frame_type = VM_FRAME_MAGIC_CFUNC | VM_ENV_FLAG_LOCAL;
++    VALUE frame_type = VM_FRAME_MAGIC_CFUNC | VM_FRAME_FLAG_CFRAME | VM_ENV_FLAG_LOCAL;
 +
-+    if (check_kw_splat) {
-+        if (UNLIKELY(calling->kw_splat)) {
-+            frame_type |= VM_FRAME_FLAG_CFRAME_KW;
-+        }
-+        else if (UNLIKELY(empty_kw_splat)) {
-+            frame_type |= VM_FRAME_FLAG_CFRAME_EMPTY_KW;
-+        }
++    if (check_kw_splat && UNLIKELY(calling->kw_splat)) {
++        frame_type |= VM_FRAME_FLAG_CFRAME_KW;
 +    }
 +
 +    RUBY_DTRACE_CMETHOD_ENTRY_HOOK(ec, me->owner, me->def->original_id);
 +    EXEC_EVENT_HOOK(ec, RUBY_EVENT_C_CALL, recv, me->def->original_id, vm_ci_mid(ci), me->owner, Qundef);
 +
-+    rb_control_frame_t *new_cfp = vm_push_frame(ec, sorbet->iseqptr, frame_type, recv,
-+                                                block_handler, (VALUE)me,
-+                                                0, ec->cfp->sp, local_size, sorbet->iseqptr->body->stack_max);
++    vm_push_frame(ec, sorbet->iseqptr, frame_type, recv,
++                  block_handler, (VALUE)me,
++                  0, ec->cfp->sp, local_size, sorbet->iseqptr->body->stack_max);
++    rb_control_frame_t *new_cfp = ec->cfp;
 +
 +    reg_cfp->sp -= param_size + 1;
 +    val = (*sorbet->func)(argc, reg_cfp->sp + 1, recv, new_cfp, calling, cd);
@@ -656,26 +639,28 @@ diff -ruN '--exclude=*.orig' a/vm_insnhelper.c b/vm_insnhelper.c
 +}
 +
 +static VALUE
-+vm_call_sorbet_with_frame(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, struct rb_calling_info *calling, struct rb_call_data *cd, int empty_kw_splat)
++vm_call_sorbet_with_frame(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, struct rb_calling_info *calling, int empty_kw_splat)
 +{
++    struct rb_call_data cd = { calling->ci, calling->cc };
 +    const int check_kw_splat = 1;
-+    const rb_callable_method_entry_t *me = vm_cc_cme(cd->cc);
++    const rb_callable_method_entry_t *me = vm_cc_cme(calling->cc);
 +    const rb_method_sorbet_t *sorbet = UNALIGNED_MEMBER_PTR(me->def, body.sorbet);
 +    const int argc = calling->argc;
 +    const int param_size = calling->argc;
 +    const int locals = sorbet->iseqptr->body->local_table_size;
-+    return vm_call_sorbet_with_frame_normal(ec, reg_cfp, calling, cd, me, check_kw_splat, empty_kw_splat, argc, param_size, locals);
++    return vm_call_sorbet_with_frame_normal(ec, reg_cfp, calling, &cd, me, check_kw_splat, empty_kw_splat, argc, param_size, locals);
 +}
 +
 +static VALUE
-+vm_call_sorbet_kwargs(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
++vm_call_sorbet_kwargs(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, struct rb_calling_info *calling)
 +{
-+    const struct rb_callinfo *ci = cd->ci;
++    struct rb_call_data cd = { calling->ci, calling->cc };
++    const struct rb_callinfo *ci = calling->ci;
 +    const struct rb_callinfo_kwarg *kw_arg = vm_ci_kwarg(ci);
 +    /* We have ensured that anything going through this function won't have kwsplats. */
 +    const int check_kw_splat = 0;
 +    const int empty_kw_splat = 0;
-+    const rb_callable_method_entry_t *me = vm_cc_cme(cd->cc);
++    const rb_callable_method_entry_t *me = vm_cc_cme(calling->cc);
 +    const rb_method_sorbet_t *sorbet = UNALIGNED_MEMBER_PTR(me->def, body.sorbet);
 +
 +    /* Similarly to the above, we have ensured that anything going through this function
@@ -689,13 +674,13 @@ diff -ruN '--exclude=*.orig' a/vm_insnhelper.c b/vm_insnhelper.c
 +    const int argc = calling->argc - kw_arg->keyword_len;
 +    const int param_size = calling->argc;
 +    const int locals = sorbet->iseqptr->body->local_table_size;
-+    return vm_call_sorbet_with_frame_normal(ec, reg_cfp, calling, cd, me, check_kw_splat, empty_kw_splat, argc, param_size, locals);
++    return vm_call_sorbet_with_frame_normal(ec, reg_cfp, calling, &cd, me, check_kw_splat, empty_kw_splat, argc, param_size, locals);
 +}
 +
 +static VALUE
-+vm_call_sorbet(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
++vm_call_sorbet(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, struct rb_calling_info *calling)
 +{
-+    const struct rb_callinfo *ci = cd->ci;
++    const struct rb_callinfo *ci = calling->ci;
 +    int empty_kw_splat;
 +    RB_DEBUG_COUNTER_INC(ccf_cfunc);
 +
@@ -705,7 +690,7 @@ diff -ruN '--exclude=*.orig' a/vm_insnhelper.c b/vm_insnhelper.c
 +    if (empty_kw_splat && calling->kw_splat) {
 +        empty_kw_splat = 0;
 +    }
-+    return vm_call_sorbet_with_frame(ec, reg_cfp, calling, cd, empty_kw_splat);
++    return vm_call_sorbet_with_frame(ec, reg_cfp, calling, empty_kw_splat);
 +}
 +
 +/* These would normally be generated by tool/mk_call_iseq_optimized.rb.
@@ -719,267 +704,291 @@ diff -ruN '--exclude=*.orig' a/vm_insnhelper.c b/vm_insnhelper.c
 + */
 +
 +static VALUE
-+vm_call_sorbet_fast_0params_0locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
++vm_call_sorbet_fast_0params_0locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling)
 +{
++    struct rb_call_data cd = { calling->ci, calling->cc };
 +    const int check_kw_splat = 0;
 +    const int empty_kw_splat = 0;
 +    const int argc = 0;
 +    const int params = 0;
 +    const int locals = 0;
-+    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, cd, cd->cc.me, check_kw_splat, empty_kw_splat, argc, params, locals);
++    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, &cd, vm_cc_cme(calling->cc), check_kw_splat, empty_kw_splat, argc, params, locals);
 +}
 +
 +static VALUE
-+vm_call_sorbet_fast_0params_1locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
++vm_call_sorbet_fast_0params_1locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling)
 +{
++    struct rb_call_data cd = { calling->ci, calling->cc };
 +    const int check_kw_splat = 0;
 +    const int empty_kw_splat = 0;
 +    const int argc = 0;
 +    const int params = 0;
 +    const int locals = 1;
-+    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, cd, cd->cc.me, check_kw_splat, empty_kw_splat, argc, params, locals);
++    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, &cd, vm_cc_cme(calling->cc), check_kw_splat, empty_kw_splat, argc, params, locals);
 +}
 +
 +static VALUE
-+vm_call_sorbet_fast_0params_2locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
++vm_call_sorbet_fast_0params_2locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling)
 +{
++    struct rb_call_data cd = { calling->ci, calling->cc };
 +    const int check_kw_splat = 0;
 +    const int empty_kw_splat = 0;
 +    const int argc = 0;
 +    const int params = 0;
 +    const int locals = 2;
-+    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, cd, cd->cc.me, check_kw_splat, empty_kw_splat, argc, params, locals);
++    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, &cd, vm_cc_cme(calling->cc), check_kw_splat, empty_kw_splat, argc, params, locals);
 +}
 +
 +static VALUE
-+vm_call_sorbet_fast_0params_3locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
++vm_call_sorbet_fast_0params_3locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling)
 +{
++    struct rb_call_data cd = { calling->ci, calling->cc };
 +    const int check_kw_splat = 0;
 +    const int empty_kw_splat = 0;
 +    const int argc = 0;
 +    const int params = 0;
 +    const int locals = 3;
-+    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, cd, cd->cc.me, check_kw_splat, empty_kw_splat, argc, params, locals);
++    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, &cd, vm_cc_cme(calling->cc), check_kw_splat, empty_kw_splat, argc, params, locals);
 +}
 +
 +static VALUE
-+vm_call_sorbet_fast_0params_4locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
++vm_call_sorbet_fast_0params_4locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling)
 +{
++    struct rb_call_data cd = { calling->ci, calling->cc };
 +    const int check_kw_splat = 0;
 +    const int empty_kw_splat = 0;
 +    const int argc = 0;
 +    const int params = 0;
 +    const int locals = 4;
-+    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, cd, cd->cc.me, check_kw_splat, empty_kw_splat, argc, params, locals);
++    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, &cd, vm_cc_cme(calling->cc), check_kw_splat, empty_kw_splat, argc, params, locals);
 +}
 +
 +static VALUE
-+vm_call_sorbet_fast_0params_5locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
++vm_call_sorbet_fast_0params_5locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling)
 +{
++    struct rb_call_data cd = { calling->ci, calling->cc };
 +    const int check_kw_splat = 0;
 +    const int empty_kw_splat = 0;
 +    const int argc = 0;
 +    const int params = 0;
 +    const int locals = 5;
-+    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, cd, cd->cc.me, check_kw_splat, empty_kw_splat, argc, params, locals);
++    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, &cd, vm_cc_cme(calling->cc), check_kw_splat, empty_kw_splat, argc, params, locals);
 +}
 +
 +static VALUE
-+vm_call_sorbet_fast_1params_0locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
++vm_call_sorbet_fast_1params_0locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling)
 +{
++    struct rb_call_data cd = { calling->ci, calling->cc };
 +    const int check_kw_splat = 0;
 +    const int empty_kw_splat = 0;
 +    const int argc = 1;
 +    const int params = 1;
 +    const int locals = 0;
-+    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, cd, cd->cc.me, check_kw_splat, empty_kw_splat, argc, params, locals);
++    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, &cd, vm_cc_cme(calling->cc), check_kw_splat, empty_kw_splat, argc, params, locals);
 +}
 +
 +static VALUE
-+vm_call_sorbet_fast_1params_1locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
++vm_call_sorbet_fast_1params_1locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling)
 +{
++    struct rb_call_data cd = { calling->ci, calling->cc };
 +    const int check_kw_splat = 0;
 +    const int empty_kw_splat = 0;
 +    const int argc = 1;
 +    const int params = 1;
 +    const int locals = 1;
-+    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, cd, cd->cc.me, check_kw_splat, empty_kw_splat, argc, params, locals);
++    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, &cd, vm_cc_cme(calling->cc), check_kw_splat, empty_kw_splat, argc, params, locals);
 +}
 +
 +static VALUE
-+vm_call_sorbet_fast_1params_2locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
++vm_call_sorbet_fast_1params_2locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling)
 +{
++    struct rb_call_data cd = { calling->ci, calling->cc };
 +    const int check_kw_splat = 0;
 +    const int empty_kw_splat = 0;
 +    const int argc = 1;
 +    const int params = 1;
 +    const int locals = 2;
-+    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, cd, cd->cc.me, check_kw_splat, empty_kw_splat, argc, params, locals);
++    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, &cd, vm_cc_cme(calling->cc), check_kw_splat, empty_kw_splat, argc, params, locals);
 +}
 +
 +static VALUE
-+vm_call_sorbet_fast_1params_3locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
++vm_call_sorbet_fast_1params_3locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling)
 +{
++    struct rb_call_data cd = { calling->ci, calling->cc };
 +    const int check_kw_splat = 0;
 +    const int empty_kw_splat = 0;
 +    const int argc = 1;
 +    const int params = 1;
 +    const int locals = 3;
-+    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, cd, cd->cc.me, check_kw_splat, empty_kw_splat, argc, params, locals);
++    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, &cd, vm_cc_cme(calling->cc), check_kw_splat, empty_kw_splat, argc, params, locals);
 +}
 +
 +static VALUE
-+vm_call_sorbet_fast_1params_4locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
++vm_call_sorbet_fast_1params_4locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling)
 +{
++    struct rb_call_data cd = { calling->ci, calling->cc };
 +    const int check_kw_splat = 0;
 +    const int empty_kw_splat = 0;
 +    const int argc = 1;
 +    const int params = 1;
 +    const int locals = 4;
-+    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, cd, cd->cc.me, check_kw_splat, empty_kw_splat, argc, params, locals);
++    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, &cd, vm_cc_cme(calling->cc), check_kw_splat, empty_kw_splat, argc, params, locals);
 +}
 +
 +static VALUE
-+vm_call_sorbet_fast_1params_5locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
++vm_call_sorbet_fast_1params_5locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling)
 +{
++    struct rb_call_data cd = { calling->ci, calling->cc };
 +    const int check_kw_splat = 0;
 +    const int empty_kw_splat = 0;
 +    const int argc = 1;
 +    const int params = 1;
 +    const int locals = 5;
-+    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, cd, cd->cc.me, check_kw_splat, empty_kw_splat, argc, params, locals);
++    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, &cd, vm_cc_cme(calling->cc), check_kw_splat, empty_kw_splat, argc, params, locals);
 +}
 +
 +static VALUE
-+vm_call_sorbet_fast_2params_0locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
++vm_call_sorbet_fast_2params_0locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling)
 +{
++    struct rb_call_data cd = { calling->ci, calling->cc };
 +    const int check_kw_splat = 0;
 +    const int empty_kw_splat = 0;
 +    const int argc = 2;
 +    const int params = 2;
 +    const int locals = 0;
-+    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, cd, cd->cc.me, check_kw_splat, empty_kw_splat, argc, params, locals);
++    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, &cd, vm_cc_cme(calling->cc), check_kw_splat, empty_kw_splat, argc, params, locals);
 +}
 +
 +static VALUE
-+vm_call_sorbet_fast_2params_1locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
++vm_call_sorbet_fast_2params_1locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling)
 +{
++    struct rb_call_data cd = { calling->ci, calling->cc };
 +    const int check_kw_splat = 0;
 +    const int empty_kw_splat = 0;
 +    const int argc = 2;
 +    const int params = 2;
 +    const int locals = 1;
-+    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, cd, cd->cc.me, check_kw_splat, empty_kw_splat, argc, params, locals);
++    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, &cd, vm_cc_cme(calling->cc), check_kw_splat, empty_kw_splat, argc, params, locals);
 +}
 +
 +static VALUE
-+vm_call_sorbet_fast_2params_2locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
++vm_call_sorbet_fast_2params_2locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling)
 +{
++    struct rb_call_data cd = { calling->ci, calling->cc };
 +    const int check_kw_splat = 0;
 +    const int empty_kw_splat = 0;
 +    const int argc = 2;
 +    const int params = 2;
 +    const int locals = 2;
-+    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, cd, cd->cc.me, check_kw_splat, empty_kw_splat, argc, params, locals);
++    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, &cd, vm_cc_cme(calling->cc), check_kw_splat, empty_kw_splat, argc, params, locals);
 +}
 +
 +static VALUE
-+vm_call_sorbet_fast_2params_3locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
++vm_call_sorbet_fast_2params_3locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling)
 +{
++    struct rb_call_data cd = { calling->ci, calling->cc };
 +    const int check_kw_splat = 0;
 +    const int empty_kw_splat = 0;
 +    const int argc = 2;
 +    const int params = 2;
 +    const int locals = 3;
-+    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, cd, cd->cc.me, check_kw_splat, empty_kw_splat, argc, params, locals);
++    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, &cd, vm_cc_cme(calling->cc), check_kw_splat, empty_kw_splat, argc, params, locals);
 +}
 +
 +static VALUE
-+vm_call_sorbet_fast_2params_4locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
++vm_call_sorbet_fast_2params_4locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling)
 +{
++    struct rb_call_data cd = { calling->ci, calling->cc };
 +    const int check_kw_splat = 0;
 +    const int empty_kw_splat = 0;
 +    const int argc = 2;
 +    const int params = 2;
 +    const int locals = 4;
-+    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, cd, cd->cc.me, check_kw_splat, empty_kw_splat, argc, params, locals);
++    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, &cd, vm_cc_cme(calling->cc), check_kw_splat, empty_kw_splat, argc, params, locals);
 +}
 +
 +static VALUE
-+vm_call_sorbet_fast_2params_5locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
++vm_call_sorbet_fast_2params_5locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling)
 +{
++    struct rb_call_data cd = { calling->ci, calling->cc };
 +    const int check_kw_splat = 0;
 +    const int empty_kw_splat = 0;
 +    const int argc = 2;
 +    const int params = 2;
 +    const int locals = 5;
-+    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, cd, cd->cc.me, check_kw_splat, empty_kw_splat, argc, params, locals);
++    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, &cd, vm_cc_cme(calling->cc), check_kw_splat, empty_kw_splat, argc, params, locals);
 +}
 +
 +static VALUE
-+vm_call_sorbet_fast_3params_0locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
++vm_call_sorbet_fast_3params_0locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling)
 +{
++    struct rb_call_data cd = { calling->ci, calling->cc };
 +    const int check_kw_splat = 0;
 +    const int empty_kw_splat = 0;
 +    const int argc = 3;
 +    const int params = 3;
 +    const int locals = 0;
-+    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, cd, cd->cc.me, check_kw_splat, empty_kw_splat, argc, params, locals);
++    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, &cd, vm_cc_cme(calling->cc), check_kw_splat, empty_kw_splat, argc, params, locals);
 +}
 +
 +static VALUE
-+vm_call_sorbet_fast_3params_1locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
++vm_call_sorbet_fast_3params_1locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling)
 +{
++    struct rb_call_data cd = { calling->ci, calling->cc };
 +    const int check_kw_splat = 0;
 +    const int empty_kw_splat = 0;
 +    const int argc = 3;
 +    const int params = 3;
 +    const int locals = 1;
-+    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, cd, cd->cc.me, check_kw_splat, empty_kw_splat, argc, params, locals);
++    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, &cd, vm_cc_cme(calling->cc), check_kw_splat, empty_kw_splat, argc, params, locals);
 +}
 +
 +static VALUE
-+vm_call_sorbet_fast_3params_2locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
++vm_call_sorbet_fast_3params_2locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling)
 +{
++    struct rb_call_data cd = { calling->ci, calling->cc };
 +    const int check_kw_splat = 0;
 +    const int empty_kw_splat = 0;
 +    const int argc = 3;
 +    const int params = 3;
 +    const int locals = 2;
-+    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, cd, cd->cc.me, check_kw_splat, empty_kw_splat, argc, params, locals);
++    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, &cd, vm_cc_cme(calling->cc), check_kw_splat, empty_kw_splat, argc, params, locals);
 +}
 +
 +static VALUE
-+vm_call_sorbet_fast_3params_3locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
++vm_call_sorbet_fast_3params_3locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling)
 +{
++    struct rb_call_data cd = { calling->ci, calling->cc };
 +    const int check_kw_splat = 0;
 +    const int empty_kw_splat = 0;
 +    const int argc = 3;
 +    const int params = 3;
 +    const int locals = 3;
-+    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, cd, cd->cc.me, check_kw_splat, empty_kw_splat, argc, params, locals);
++    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, &cd, vm_cc_cme(calling->cc), check_kw_splat, empty_kw_splat, argc, params, locals);
 +}
 +
 +static VALUE
-+vm_call_sorbet_fast_3params_4locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
++vm_call_sorbet_fast_3params_4locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling)
 +{
++    struct rb_call_data cd = { calling->ci, calling->cc };
 +    const int check_kw_splat = 0;
 +    const int empty_kw_splat = 0;
 +    const int argc = 3;
 +    const int params = 3;
 +    const int locals = 4;
-+    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, cd, cd->cc.me, check_kw_splat, empty_kw_splat, argc, params, locals);
++    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, &cd, vm_cc_cme(calling->cc), check_kw_splat, empty_kw_splat, argc, params, locals);
 +}
 +
 +static VALUE
-+vm_call_sorbet_fast_3params_5locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
++vm_call_sorbet_fast_3params_5locals(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling)
 +{
++    struct rb_call_data cd = { calling->ci, calling->cc };
 +    const int check_kw_splat = 0;
 +    const int empty_kw_splat = 0;
 +    const int argc = 3;
 +    const int params = 3;
 +    const int locals = 5;
-+    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, cd, cd->cc.me, check_kw_splat, empty_kw_splat, argc, params, locals);
++    return vm_call_sorbet_with_frame_normal(ec, cfp, calling, &cd, vm_cc_cme(calling->cc), check_kw_splat, empty_kw_splat, argc, params, locals);
 +}
 +
 +static const vm_call_handler vm_call_sorbet_handlers[][6] = {
@@ -1025,10 +1034,10 @@ diff -ruN '--exclude=*.orig' a/vm_insnhelper.c b/vm_insnhelper.c
 + * better, which is what this function is trying to decide.
 + */
 +static VALUE
-+vm_call_sorbet_maybe_setup_fastpath(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
++vm_call_sorbet_maybe_setup_fastpath(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling)
 +{
-+    const struct rb_callinfo *ci = cd->ci;
-+    const struct rb_callcache *cc = cd->cc;
++    const struct rb_callinfo *ci = calling->ci;
++    const struct rb_callcache *cc = calling->cc;
 +    const rb_method_sorbet_t *sorbet = UNALIGNED_MEMBER_PTR(vm_cc_cme(cc)->def, body.sorbet);
 +    enum sorbet_method_opt_kind kind = vm_call_sorbet_optimizable_p(ci, cc, calling, sorbet);
 +
@@ -1039,10 +1048,10 @@ diff -ruN '--exclude=*.orig' a/vm_insnhelper.c b/vm_insnhelper.c
 +     */
 +    switch (kind) {
 +    case SORBET_METHOD_OPT_NONE:
-+        return vm_call_sorbet(ec, cfp, calling, cd);
++        return vm_call_sorbet(ec, cfp, calling);
 +    case SORBET_METHOD_OPT_EFFICIENT_KWARGS:
 +        CC_SET_FASTPATH(cc, vm_call_sorbet_kwargs, TRUE);
-+        return vm_call_sorbet_kwargs(ec, cfp, calling, cd);
++        return vm_call_sorbet_kwargs(ec, cfp, calling);
 +    case SORBET_METHOD_OPT_REQ_PARAM_ONLY: {
 +        /* We know that the method we're calling takes only positional arguments.
 +         * But we need to verify that the method is being passed only positional
@@ -1065,7 +1074,7 @@ diff -ruN '--exclude=*.orig' a/vm_insnhelper.c b/vm_insnhelper.c
 +             * and let the argument checking in the function itself handle raising
 +             * the error.
 +             */
-+            return vm_call_sorbet_with_frame(ec, cfp, calling, cd, empty_kw_splat);
++            return vm_call_sorbet_with_frame(ec, cfp, calling, empty_kw_splat);
 +        }
 +
 +        /* vm_call_method_each_type has already set the fastpath to vm_call_sorbet,
@@ -1073,7 +1082,7 @@ diff -ruN '--exclude=*.orig' a/vm_insnhelper.c b/vm_insnhelper.c
 +         * we know a different fastpath is available, which we set here.
 +         */
 +        CC_SET_FASTPATH(cc, vm_call_sorbet_fast_func(ci, sorbet->param->size, sorbet->iseqptr->body->local_table_size), TRUE);
-+        return vm_call_sorbet(ec, cfp, calling, cd);
++        return vm_call_sorbet(ec, cfp, calling);
 +    }
 +    }
 +}
@@ -1081,18 +1090,18 @@ diff -ruN '--exclude=*.orig' a/vm_insnhelper.c b/vm_insnhelper.c
  static VALUE
  vm_call_attrset(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling)
  {
-@@ -3417,6 +3983,10 @@
+@@ -3417,6 +4004,10 @@
          CC_SET_FASTPATH(cc, vm_call_cfunc, TRUE);
          return vm_call_cfunc(ec, cfp, calling);
  
 +      case VM_METHOD_TYPE_SORBET:
 +        CC_SET_FASTPATH(cc, vm_call_sorbet, TRUE);
-+        return vm_call_sorbet_maybe_setup_fastpath(ec, cfp, calling, cd);
++        return vm_call_sorbet_maybe_setup_fastpath(ec, cfp, calling);
 +
        case VM_METHOD_TYPE_ATTRSET:
          CALLER_SETUP_ARG(cfp, calling, ci);
          CALLER_REMOVE_EMPTY_KW_SPLAT(cfp, calling, ci);
-@@ -3701,14 +4271,17 @@
+@@ -3701,14 +4292,17 @@
  vm_yield_with_cfunc(rb_execution_context_t *ec,
  		    const struct rb_captured_block *captured,
                      VALUE self, int argc, const VALUE *argv, int kw_splat, VALUE block_handler,
@@ -1113,7 +1122,7 @@ diff -ruN '--exclude=*.orig' a/vm_insnhelper.c b/vm_insnhelper.c
  	arg = rb_ary_new4(argc, argv);
      }
      else if (argc == 0) {
-@@ -3730,7 +4303,7 @@
+@@ -3730,6 +4324,6 @@
  		  self,
  		  VM_GUARDED_PREV_EP(captured->ep),
                    (VALUE)me,
@@ -1121,43 +1130,11 @@ diff -ruN '--exclude=*.orig' a/vm_insnhelper.c b/vm_insnhelper.c
 +		  0, ec->cfp->sp + (args_on_stack ? argc : 0), 0, 0);
      val = (*ifunc->func)(arg, (VALUE)ifunc->data, argc, argv, blockarg);
      rb_vm_pop_frame(ec);
- 
+
 diff -ruN '--exclude=*.orig' a/vm_method.c b/vm_method.c
 --- a/vm_method.c	2024-04-23 10:23:26.000000000 +0000
 +++ b/vm_method.c	2025-12-22 00:18:10.514269261 +0000
-@@ -295,6 +295,31 @@
-     RB_OBJ_WRITTEN(table_owner, Qundef, (VALUE)me);
- }
- 
-+void
-+rb_method_table_insert(VALUE klass, struct rb_id_table *table, ID method_id, const rb_method_entry_t *me)
-+{
-+    VALUE table_owner = klass;
-+    if (RB_TYPE_P(klass, T_ICLASS) && !FL_TEST(klass, RICLASS_IS_ORIGIN)) {
-+        bool owner_found = false;
-+        VALUE owner = RBASIC(klass)->klass;
-+        // Loop in case the owning class has prepended modules
-+        while (owner) {
-+            if (RCLASS_M_TBL(owner) == table) {
-+                owner_found = true;
-+                break;
-+            }
-+            owner = RCLASS_SUPER(owner);
-+        }
-+        if (!owner_found) rb_bug("failed to find method table owner");
-+        table_owner = owner;
-+    }
-+
-+    VM_ASSERT(RB_TYPE_P(table_owner, T_CLASS) || RB_TYPE_P(table_owner, T_ICLASS) || RB_TYPE_P(table_owner, T_MODULE));
-+    VM_ASSERT(table == RCLASS_M_TBL(table_owner));
-+    rb_id_table_insert(table, method_id, (VALUE)me);
-+    RB_OBJ_WRITTEN(table_owner, Qundef, (VALUE)me);
-+}
-+
- VALUE
- rb_f_notimplement(int argc, const VALUE *argv, VALUE obj, VALUE marker)
- {
-@@ -324,6 +349,16 @@
+@@ -324,6 +324,16 @@
      }
  }
  
@@ -1174,7 +1151,7 @@ diff -ruN '--exclude=*.orig' a/vm_method.c b/vm_method.c
  static void
  rb_method_definition_release(rb_method_definition_t *def, int complemented)
  {
-@@ -424,6 +459,14 @@
+@@ -424,6 +434,14 @@
      cfunc->invoker = call_cfunc_invoker_func(argc);
  }
  
@@ -1189,7 +1166,7 @@ diff -ruN '--exclude=*.orig' a/vm_method.c b/vm_method.c
  MJIT_FUNC_EXPORTED void
  rb_method_definition_set(const rb_method_entry_t *me, rb_method_definition_t *def, void *opts)
  {
-@@ -457,6 +500,12 @@
+@@ -457,6 +475,12 @@
  		setup_method_cfunc_struct(UNALIGNED_MEMBER_PTR(def, body.cfunc), cfunc->func, cfunc->argc);
  		return;
  	    }
@@ -1202,7 +1179,7 @@ diff -ruN '--exclude=*.orig' a/vm_method.c b/vm_method.c
  	  case VM_METHOD_TYPE_ATTRSET:
  	  case VM_METHOD_TYPE_IVAR:
  	    {
-@@ -538,6 +587,7 @@
+@@ -538,6 +562,7 @@
        case VM_METHOD_TYPE_OPTIMIZED:
        case VM_METHOD_TYPE_UNDEF:
        case VM_METHOD_TYPE_NOTIMPLEMENTED:
@@ -1210,7 +1187,7 @@ diff -ruN '--exclude=*.orig' a/vm_method.c b/vm_method.c
  	break;
      }
  }
-@@ -1875,6 +1925,8 @@
+@@ -1875,6 +1900,8 @@
  	return 1;
        case VM_METHOD_TYPE_OPTIMIZED:
  	return d1->body.optimize_type == d2->body.optimize_type;
@@ -1219,7 +1196,7 @@ diff -ruN '--exclude=*.orig' a/vm_method.c b/vm_method.c
        case VM_METHOD_TYPE_REFINED:
        case VM_METHOD_TYPE_ALIAS:
  	break;
-@@ -1909,6 +1961,8 @@
+@@ -1909,6 +1936,8 @@
  	return hash;
        case VM_METHOD_TYPE_OPTIMIZED:
  	return rb_hash_uint(hash, def->body.optimize_type);

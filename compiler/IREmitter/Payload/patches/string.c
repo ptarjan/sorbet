@@ -16,3 +16,8 @@ VALUE (*sorbet_rb_str_to_s_func(void))(VALUE) {
 VALUE sorbet_rb_str_to_s(VALUE str) {
     return rb_str_to_s(str);
 }
+
+/* Wrapper for rb_str_ord which is static in Ruby 3.0 */
+VALUE sorbet_rb_str_ord(VALUE str) {
+    return rb_str_ord(str);
+}

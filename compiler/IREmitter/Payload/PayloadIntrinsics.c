@@ -729,11 +729,12 @@ VALUE sorbet_int_rb_str_length(VALUE recv, ID fun, int argc, VALUE *const restri
 
 // String#ord
 // Calling convention: 0
-extern VALUE rb_str_ord(VALUE obj);
+// In Ruby 3.0, rb_str_ord is static, so we use a wrapper defined in patches/string.c
+extern VALUE sorbet_rb_str_ord(VALUE obj);
 
 VALUE sorbet_int_rb_str_ord(VALUE recv, ID fun, int argc, VALUE *const restrict args, BlockFFIType blk, VALUE closure) {
     rb_check_arity(argc, 0, 0);
-    return rb_str_ord(recv);
+    return sorbet_rb_str_ord(recv);
 }
 
 // String#start_with?
