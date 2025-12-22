@@ -109,6 +109,7 @@ def register_ruby_dependencies():
         patches = [
             "@com_stripe_ruby_typer//third_party/ruby:sorbet_ruby_3_0_for_compiler.patch",
             "@com_stripe_ruby_typer//third_party/ruby:sorbet_ruby_3_0_vm_invoke_ifunc.patch",
+            "@com_stripe_ruby_typer//third_party/ruby:sorbet_ruby_3_0_ivar_cache.patch",
         ],
         patch_tool = "patch",
         patch_args = ["-p1"],

@@ -1,0 +1,37 @@
+diff -ruN a/vm_insnhelper.c b/vm_insnhelper.c
+--- a/vm_insnhelper.c	2024-04-23 10:23:26.000000000 +0000
++++ b/vm_insnhelper.c	2025-12-22 08:00:00.000000000 +0000
+@@ -1101,10 +1101,17 @@ ALWAYS_INLINE(static void fill_ivar_cache(const rb_iseq_t *iseq, IVC ic, const s
+ static inline void
+ fill_ivar_cache(const rb_iseq_t *iseq, IVC ic, const struct rb_callcache *cc, int is_attr, struct rb_iv_index_tbl_entry *ent)
+ {
+-    // fill cache
++    /* fill cache
++     * Sorbet passes NULL for iseq when using inline caches from compiled code.
++     * In that case, skip the GC write barrier since there's no iseq object to
++     * register the reference with.
++     */
+     if (!is_attr) {
+         ic->entry = ent;
+-        RB_OBJ_WRITTEN(iseq, Qundef, ent->class_value);
++        /* Skip write barrier if iseq is NULL (Sorbet compiled code) */
++        if (iseq != NULL) {
++            RB_OBJ_WRITTEN(iseq, Qundef, ent->class_value);
++        }
+     }
+     else {
+         vm_cc_attr_index_set(cc, (int)ent->index + 1);
+@@ -1206,8 +1213,12 @@ vm_setivar_slowpath(VALUE obj, ID id, VALUE val, const rb_iseq_t *iseq, IVC ic,
+
+         if (iv_index_tbl_lookup(iv_index_tbl, id, &ent)) {
+             if (!is_attr) {
++                /* Sorbet passes NULL for iseq when using inline caches from compiled code.
++                 * In that case, skip the GC write barrier. */
+                 ic->entry = ent;
+-                RB_OBJ_WRITTEN(iseq, Qundef, ent->class_value);
++                if (iseq != NULL) {
++                    RB_OBJ_WRITTEN(iseq, Qundef, ent->class_value);
++                }
+             }
+             else if (ent->index >= INT_MAX) {
+                 rb_raise(rb_eArgError, "too many instance variables");
