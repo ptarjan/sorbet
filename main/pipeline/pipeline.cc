@@ -1,3 +1,6 @@
+// Include <regex> before other headers to avoid poison pragma conflicts with libstdc++
+#include <regex>
+
 #ifdef SORBET_REALMAIN_MIN
 // minimal build to speedup compilation. Remove extra features
 #else

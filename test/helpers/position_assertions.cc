@@ -1,3 +1,6 @@
+// Include <regex> before other headers to avoid poison pragma conflicts with libstdc++
+#include <regex>
+
 #include "doctest/doctest.h"
 // ^ Include first because it violates linting rules.
 
@@ -12,7 +15,6 @@
 #include "test/helpers/lsp.h"
 #include "test/helpers/position_assertions.h"
 #include <iterator>
-#include <regex>
 #include <string.h>
 
 using namespace std;

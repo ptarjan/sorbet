@@ -1,3 +1,6 @@
+// Include <regex> before other headers to avoid poison pragma conflicts with libstdc++
+#include <regex>
+
 #include "doctest/doctest.h"
 #include <cxxopts.hpp>
 // has to go first as it violates our requirements

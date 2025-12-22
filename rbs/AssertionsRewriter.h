@@ -1,6 +1,9 @@
 #ifndef SORBET_RBS_ASSERTIONS_REWRITER_H
 #define SORBET_RBS_ASSERTIONS_REWRITER_H
 
+// Include <regex> before other headers to avoid poison pragma conflicts with libstdc++
+#include <regex>
+
 #include "parser/parser.h"
 #include "rbs/CommentsAssociator.h"
 #include "rbs/rbs_common.h"

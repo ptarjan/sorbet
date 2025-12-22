@@ -403,15 +403,15 @@ public:
 
 class JSONIntEnumType final : public JSONClassType {
 private:
-    std::vector<std::pair<const std::string, int>> enumValues;
+    std::vector<std::pair<std::string, int>> enumValues;
 
     std::string enumVar(std::string_view value) {
         return fmt::format("{}::{}", typeName, value);
     }
 
 public:
-    JSONIntEnumType(std::string_view typeName, std::vector<std::pair<const std::string, int>> enumValues)
-        : JSONClassType(typeName), enumValues(enumValues) {}
+    JSONIntEnumType(std::string_view typeName, std::vector<std::pair<std::string, int>> enumValues)
+        : JSONClassType(typeName), enumValues(std::move(enumValues)) {}
 
     BaseKind getCPPBaseKind() const {
         return BaseKind::IntKind;
@@ -467,7 +467,7 @@ public:
 
 class JSONStringEnumType final : public JSONClassType {
 private:
-    std::vector<const std::string> enumValues;
+    std::vector<std::string> enumValues;
 
     // Capitalizes the first character of the input string (e.g., foo => Foo),
     // strips {'.','_','/'}, and capitalizes first letter after those characters.
@@ -492,8 +492,8 @@ private:
     }
 
 public:
-    JSONStringEnumType(std::string_view typeName, std::vector<const std::string> enumValues)
-        : JSONClassType(typeName), enumValues(enumValues) {}
+    JSONStringEnumType(std::string_view typeName, std::vector<std::string> enumValues)
+        : JSONClassType(typeName), enumValues(std::move(enumValues)) {}
 
     BaseKind getCPPBaseKind() const {
         return BaseKind::IntKind;
@@ -866,10 +866,10 @@ public:
 class JSONDiscriminatedUnionVariantType final : public JSONVariantType {
 private:
     std::shared_ptr<FieldDef> fieldDef;
-    const std::vector<std::pair<const std::string, std::shared_ptr<JSONType>>> variantsByDiscriminant;
+    const std::vector<std::pair<std::string, std::shared_ptr<JSONType>>> variantsByDiscriminant;
 
     static std::vector<std::shared_ptr<JSONType>>
-    getVariantTypes(const std::vector<std::pair<const std::string, std::shared_ptr<JSONType>>> &variants) {
+    getVariantTypes(const std::vector<std::pair<std::string, std::shared_ptr<JSONType>>> &variants) {
         std::vector<std::shared_ptr<JSONType>> rv;
         rv.reserve(variants.size());
         for (auto &variant : variants) {
@@ -889,9 +889,9 @@ private:
 public:
     JSONDiscriminatedUnionVariantType(
         std::shared_ptr<FieldDef> fieldDef,
-        const std::vector<std::pair<const std::string, std::shared_ptr<JSONType>>> variantsByDiscriminant)
+        std::vector<std::pair<std::string, std::shared_ptr<JSONType>>> variantsByDiscriminant)
         : JSONVariantType(getVariantTypes(variantsByDiscriminant)), fieldDef(fieldDef),
-          variantsByDiscriminant(variantsByDiscriminant) {}
+          variantsByDiscriminant(std::move(variantsByDiscriminant)) {}
 
     void emitFromJSONValue(fmt::memory_buffer &out, std::string_view from, AssignLambda assign,
                            std::string_view fieldName) {

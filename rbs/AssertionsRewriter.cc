@@ -1,3 +1,4 @@
+// Note: regex is already included via rbs/AssertionsRewriter.h
 #include "rbs/AssertionsRewriter.h"
 
 #include "absl/strings/ascii.h"
@@ -7,7 +8,6 @@
 #include "parser/helper.h"
 #include "parser/parser.h"
 #include "rbs/SignatureTranslator.h"
-#include <regex>
 
 using namespace std;
 

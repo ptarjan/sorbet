@@ -2,14 +2,14 @@
 
 using namespace std;
 
-shared_ptr<JSONType> makeStrEnum(const string name, vector<const string> values,
+shared_ptr<JSONType> makeStrEnum(const string name, vector<string> values,
                                  vector<shared_ptr<JSONClassType>> &enumTypes) {
-    shared_ptr<JSONStringEnumType> ct = make_shared<JSONStringEnumType>(name, values);
+    shared_ptr<JSONStringEnumType> ct = make_shared<JSONStringEnumType>(name, std::move(values));
     enumTypes.push_back(ct);
     return ct;
 }
 
-shared_ptr<JSONType> makeIntEnum(const string name, vector<pair<const string, int>> values,
+shared_ptr<JSONType> makeIntEnum(const string name, vector<pair<string, int>> values,
                                  vector<shared_ptr<JSONClassType>> &enumTypes) {
     auto et = make_shared<JSONIntEnumType>(name, values);
     enumTypes.push_back(et);
@@ -51,8 +51,8 @@ shared_ptr<JSONType> makeOpenVariant(vector<shared_ptr<JSONType>> variants) {
 
 shared_ptr<JSONType>
 makeDiscriminatedUnion(shared_ptr<FieldDef> fieldDef,
-                       const vector<pair<const string, shared_ptr<JSONType>>> variantsByDiscriminant) {
-    return make_shared<JSONDiscriminatedUnionVariantType>(fieldDef, variantsByDiscriminant);
+                       vector<pair<string, shared_ptr<JSONType>>> variantsByDiscriminant) {
+    return make_shared<JSONDiscriminatedUnionVariantType>(fieldDef, std::move(variantsByDiscriminant));
 }
 
 shared_ptr<JSONType> makeArray(shared_ptr<JSONType> type) {

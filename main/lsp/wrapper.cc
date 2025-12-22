@@ -1,3 +1,6 @@
+// Include <regex> before other headers to avoid poison pragma conflicts with libstdc++
+#include <regex>
+
 #include "main/lsp/wrapper.h"
 #include "core/ErrorQueue.h"
 #include "core/NullFlusher.h"
@@ -11,7 +14,6 @@
 #include "payload/payload.h"
 #include "sorbet_version/sorbet_version.h"
 #include <memory>
-#include <regex>
 
 using namespace std;
 

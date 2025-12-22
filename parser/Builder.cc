@@ -1,3 +1,6 @@
+// Include <regex> before other headers to avoid poison pragma conflicts with libstdc++
+#include <regex>
+
 #include "parser/Builder.h"
 #include "absl/strings/str_split.h"
 #include "common/common.h"
@@ -12,7 +15,6 @@
 
 #include "absl/algorithm/container.h"
 #include <algorithm>
-#include <regex>
 #include <typeinfo>
 
 using ruby_parser::ForeignPtr;

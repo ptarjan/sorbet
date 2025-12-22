@@ -1,11 +1,13 @@
 #ifndef TEST_HELPERS_POSITION_ASSERTIONS_H
 #define TEST_HELPERS_POSITION_ASSERTIONS_H
 
+// Include <regex> before other headers to avoid poison pragma conflicts with libstdc++
+#include <regex>
+
 #include "main/lsp/json_types.h"
 #include "main/lsp/wrapper.h"
 #include "main/options/options.h"
 #include "test/helpers/expectations.h"
-#include <regex>
 
 namespace sorbet::test {
 using namespace sorbet::realmain::lsp;

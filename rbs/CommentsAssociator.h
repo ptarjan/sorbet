@@ -1,11 +1,13 @@
 #ifndef SORBET_RBS_COMMENTS_ASSOCIATOR_H
 #define SORBET_RBS_COMMENTS_ASSOCIATOR_H
 
-#include "common/common.h"
-#include "parser/parser.h"
+// Include <regex> before common/common.h to avoid poison pragma conflicts with libstdc++
 #include <memory>
 #include <regex>
 #include <string_view>
+
+#include "common/common.h"
+#include "parser/parser.h"
 
 namespace sorbet::rbs {
 
