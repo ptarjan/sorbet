@@ -18,6 +18,11 @@ Bazel's Java-based HTTP downloader fails with "401 Unauthorized" or "Unable to t
 #!/bin/bash
 set -e
 
+# Configuration - all paths outside source directory
+LLVM_LOCAL="$HOME/.cache/sorbet-proxy-build/llvm_local"
+REPOS_DIR="$HOME/.cache/sorbet-proxy-build/bazel_repos"
+DISTDIR="$HOME/.cache/bazel-distdir"
+
 # ============================================================================
 # STEP 1: Install System Dependencies
 # ============================================================================
@@ -43,7 +48,6 @@ export LOCAL_BAZEL_OVERRIDE=~/.local/bin/bazel
 # ============================================================================
 # STEP 3: Setup Local LLVM
 # ============================================================================
-LLVM_LOCAL="/tmp/llvm_local"
 mkdir -p "$LLVM_LOCAL"
 cp -r /usr/lib/llvm-15/bin "$LLVM_LOCAL/"
 cp -r /usr/lib/llvm-15/include "$LLVM_LOCAL/"
@@ -64,7 +68,6 @@ echo 'workspace(name = "llvm_toolchain_15_0_7_llvm")' > "$LLVM_LOCAL/WORKSPACE"
 # ============================================================================
 # STEP 4: Download Blocked Repositories via codeload.github.com
 # ============================================================================
-REPOS_DIR="/tmp/bazel_repos"
 mkdir -p "$REPOS_DIR"
 
 download_repo() {
@@ -97,9 +100,21 @@ download_repo "rules_nodejs" "aspect-build" "rules_nodejs" "5.8.2" "rules_nodejs
 
 # Download prism and generate templates
 download_repo "prism" "ruby" "prism" "v1.6.0" "prism"
-cp third_party/prism.BUILD "$REPOS_DIR/prism/BUILD.bazel"
-cd "$REPOS_DIR/prism" && ruby -S rake templates
-cd -
+
+# Create prism BUILD.bazel (inline, no source dir dependency)
+cat > "$REPOS_DIR/prism/BUILD.bazel" << 'PRISM_BUILD'
+cc_library(
+    name = "prism",
+    srcs = glob(["src/**/*.c"]),
+    hdrs = glob(["include/**/*.h"]),
+    copts = ["-Wno-implicit-fallthrough"],
+    includes = ["include"],
+    visibility = ["//visibility:public"],
+)
+PRISM_BUILD
+
+# Generate prism templates
+(cd "$REPOS_DIR/prism" && ruby -S rake templates)
 
 # ============================================================================
 # STEP 5: Create Bison, M4, Ragel Wrappers (use system binaries)
@@ -171,7 +186,7 @@ if [ -n "$CACHE_DIR" ]; then
     mkdir -p "$REPOS_DIR/llvm_toolchain_15_0_7/lib"
     cp "$CACHE_DIR/bin/cc_wrapper.sh" "$REPOS_DIR/llvm_toolchain_15_0_7/bin/"
 
-    # Fix paths in cc_wrapper.sh and BUILD.bazel
+    # Fix paths in cc_wrapper.sh and BUILD.bazel to use LLVM_LOCAL
     sed -i "s|$CACHE_DIR/../llvm_toolchain_15_0_7_llvm|$LLVM_LOCAL|g" "$REPOS_DIR/llvm_toolchain_15_0_7/bin/cc_wrapper.sh"
     sed -i "s|$CACHE_DIR/../llvm_toolchain_15_0_7_llvm|$LLVM_LOCAL|g" "$REPOS_DIR/llvm_toolchain_15_0_7/BUILD.bazel"
 
@@ -185,39 +200,38 @@ if [ -n "$CACHE_DIR" ]; then
 fi
 
 # ============================================================================
-# STEP 7: Create .bazelrc.local
+# STEP 7: Create .bazelrc.local (uses $HOME-based paths)
 # ============================================================================
-cat > .bazelrc.local << 'EOF'
+cat > .bazelrc.local << EOF
 # Use pre-fetched dependencies to avoid proxy issues with Java downloader
-build --distdir=/root/.cache/bazel-distdir
-fetch --distdir=/root/.cache/bazel-distdir
-query --distdir=/root/.cache/bazel-distdir
+build --distdir=$DISTDIR
+fetch --distdir=$DISTDIR
+query --distdir=$DISTDIR
 
 # Repository overrides for blocked GitHub releases
-build --override_repository=llvm_toolchain_15_0_7_llvm=/tmp/llvm_local
-build --override_repository=llvm_toolchain_15_0_7=/tmp/bazel_repos/llvm_toolchain_15_0_7
-build --override_repository=build_bazel_rules_nodejs=/tmp/bazel_repos/build_bazel_rules_nodejs
-build --override_repository=rules_nodejs=/tmp/bazel_repos/rules_nodejs
-build --override_repository=platforms=/tmp/bazel_repos/platforms
-build --override_repository=bazel_skylib=/tmp/bazel_repos/bazel_skylib
-build --override_repository=io_bazel_rules_go=/tmp/bazel_repos/io_bazel_rules_go
-build --override_repository=aspect_bazel_lib=/tmp/bazel_repos/aspect_bazel_lib
-build --override_repository=rules_m4=/tmp/bazel_repos/rules_m4
-build --override_repository=rules_java=/tmp/bazel_repos/rules_java
-build --override_repository=rules_cc=/tmp/bazel_repos/rules_cc
-build --override_repository=rules_proto=/tmp/bazel_repos/rules_proto
-build --override_repository=rules_pkg=/tmp/bazel_repos/rules_pkg
-build --override_repository=prism=/tmp/bazel_repos/prism
-build --override_repository=bison_v3.3.2=/tmp/bazel_repos/bison_v3.3.2
-build --override_repository=m4_v1.4.18=/tmp/bazel_repos/m4_v1.4.18
-build --override_repository=ragel_v6.10=/tmp/bazel_repos/ragel_v6.10
+build --override_repository=llvm_toolchain_15_0_7_llvm=$LLVM_LOCAL
+build --override_repository=llvm_toolchain_15_0_7=$REPOS_DIR/llvm_toolchain_15_0_7
+build --override_repository=build_bazel_rules_nodejs=$REPOS_DIR/build_bazel_rules_nodejs
+build --override_repository=rules_nodejs=$REPOS_DIR/rules_nodejs
+build --override_repository=platforms=$REPOS_DIR/platforms
+build --override_repository=bazel_skylib=$REPOS_DIR/bazel_skylib
+build --override_repository=io_bazel_rules_go=$REPOS_DIR/io_bazel_rules_go
+build --override_repository=aspect_bazel_lib=$REPOS_DIR/aspect_bazel_lib
+build --override_repository=rules_m4=$REPOS_DIR/rules_m4
+build --override_repository=rules_java=$REPOS_DIR/rules_java
+build --override_repository=rules_cc=$REPOS_DIR/rules_cc
+build --override_repository=rules_proto=$REPOS_DIR/rules_proto
+build --override_repository=rules_pkg=$REPOS_DIR/rules_pkg
+build --override_repository=prism=$REPOS_DIR/prism
+build --override_repository=bison_v3.3.2=$REPOS_DIR/bison_v3.3.2
+build --override_repository=m4_v1.4.18=$REPOS_DIR/m4_v1.4.18
+build --override_repository=ragel_v6.10=$REPOS_DIR/ragel_v6.10
 EOF
 
 # ============================================================================
-# STEP 8: Run Pre-fetch Script (optional but recommended)
+# STEP 8: Create distdir
 # ============================================================================
-mkdir -p ~/.cache/bazel-distdir
-python3 prefetch_deps_v2.py || true
+mkdir -p "$DISTDIR"
 
 # ============================================================================
 # STEP 9: Build Sorbet
@@ -234,11 +248,11 @@ $LOCAL_BAZEL_OVERRIDE build //main:sorbet --config=dbg
 
 | URL Pattern | Status | Alternative |
 |-------------|--------|-------------|
-| `github.com/*/archive/*` | ✅ Works | - |
-| `codeload.github.com/*` | ✅ Works | Use for downloads |
-| `github.com/*/releases/download/*` | ❌ Blocked (403) | Use codeload or apt |
-| `storage.googleapis.com/*` | ✅ Works | Use for Bazel |
-| `ftp.gnu.org/*` | ❌ Blocked | Use apt packages |
+| `github.com/*/archive/*` | Works | - |
+| `codeload.github.com/*` | Works | Use for downloads |
+| `github.com/*/releases/download/*` | Blocked (403) | Use codeload or apt |
+| `storage.googleapis.com/*` | Works | Use for Bazel |
+| `ftp.gnu.org/*` | Blocked | Use apt packages |
 
 ## Key Insights
 
@@ -257,7 +271,7 @@ Instead of downloading from GitHub releases:
 ### Prism Special Handling
 The prism dependency expects pre-generated header files from the release tarball. Since we use the source archive, we must generate templates:
 ```bash
-cd /tmp/bazel_repos/prism
+cd $HOME/.cache/sorbet-proxy-build/bazel_repos/prism
 gem install rake-compiler
 ruby -S rake templates
 ```
@@ -273,8 +287,8 @@ Missing libc++ headers. Install: `apt install libc++-15-dev libc++abi-15-dev`
 ### "unable to find library -l:libc++abi.a"
 Copy libc++ libraries to LLVM local:
 ```bash
-cp /usr/lib/llvm-15/lib/libc++abi.a /tmp/llvm_local/lib/
-cp /usr/lib/x86_64-linux-gnu/libc++.a /tmp/llvm_local/lib/
+cp /usr/lib/llvm-15/lib/libc++abi.a $HOME/.cache/sorbet-proxy-build/llvm_local/lib/
+cp /usr/lib/x86_64-linux-gnu/libc++.a $HOME/.cache/sorbet-proxy-build/llvm_local/lib/
 ```
 
 ### "m4 subprocess failed"
@@ -284,14 +298,11 @@ export M4="/usr/bin/m4"
 ```
 
 ### "prism/diagnostic.h not found"
-Generate prism templates: `cd /tmp/bazel_repos/prism && ruby -S rake templates`
-
-## Files
-
-- `.bazelrc.local` - Bazel configuration with all overrides
-- `prefetch_deps_v2.py` - Downloads dependencies using curl
-- `fetch_all_deps.sh` - Iterative build helper script
-- `PROXY_BUILD_INSTRUCTIONS.md` - This file
+Generate prism templates:
+```bash
+cd $HOME/.cache/sorbet-proxy-build/bazel_repos/prism
+ruby -S rake templates
+```
 
 ## Testing the Build
 
