@@ -10,6 +10,6 @@ def foo(**kwargs)
   comparison
 end
 
-puts foo(X)
+puts foo(**X)
 puts
 p X

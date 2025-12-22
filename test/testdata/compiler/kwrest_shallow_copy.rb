@@ -8,5 +8,5 @@ def foo(**kwargs)
   kwargs[:key] << 'hello there'
 end
 
-foo(X)
+foo(**X)
 p X
