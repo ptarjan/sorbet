@@ -1,4 +1,5 @@
-# Ignore compiled Java files
+# Ignore Java agent files (not used in final solution)
 *.class
 *.jar
+*.java
 MANIFEST.MF
