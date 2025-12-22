@@ -136,7 +136,9 @@ void sorbet_setupFunctionInlineCache(struct FunctionInlineCache *cache, ID mid, 
 
     // In Ruby 3.0, we use vm_ci_new_runtime to create the callinfo
     cd->ci = vm_ci_new_runtime(mid, flags, argc, kw_arg);
-    cd->cc = NULL;  // Will be filled in by vm_search_method
+    // In Ruby 3.0, we must use vm_cc_empty() instead of NULL
+    // because vm_cc_class_check will dereference cc without null checking
+    cd->cc = vm_cc_empty();
 }
 
 void sorbet_vmMethodSearch(struct FunctionInlineCache *cache, VALUE recv) {
