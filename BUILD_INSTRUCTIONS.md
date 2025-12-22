@@ -7,7 +7,7 @@
 ## Step 1: Create the dependency prefetcher script
 
 ```bash
-cat > prefetch_deps_v2.py << 'SCRIPT_EOF'
+cat > /tmp/prefetch_deps.py << 'SCRIPT_EOF'
 #!/usr/bin/env python3
 """
 Pre-fetch Sorbet dependencies using curl.
@@ -143,13 +143,13 @@ def main():
 if __name__ == '__main__':
     sys.exit(main())
 SCRIPT_EOF
-chmod +x prefetch_deps_v2.py
+chmod +x /tmp/prefetch_deps.py
 ```
 
 ## Step 2: Create the iterative fetcher script
 
 ```bash
-cat > fetch_all_deps.sh << 'SCRIPT_EOF'
+cat > /tmp/fetch_all_deps.sh << 'SCRIPT_EOF'
 #!/bin/bash
 # Iteratively fetch all dependencies until build succeeds
 
@@ -202,7 +202,7 @@ done
 echo "Max iterations reached"
 exit 1
 SCRIPT_EOF
-chmod +x fetch_all_deps.sh
+chmod +x /tmp/fetch_all_deps.sh
 ```
 
 ## Step 3: Create Bazel configuration
@@ -220,18 +220,18 @@ EOF
 
 ```bash
 # First, pre-fetch known dependencies from externals.bzl
-python3 prefetch_deps_v2.py
+python3 /tmp/prefetch_deps.py
 
 # Then iteratively fetch any missing transitive dependencies and build
-./fetch_all_deps.sh
+/tmp/fetch_all_deps.sh
 ```
 
 ## Alternative: Manual build after prefetch
 
-If `fetch_all_deps.sh` gets stuck, you can manually iterate:
+If the iterative fetcher gets stuck, you can manually iterate:
 
 ```bash
-python3 prefetch_deps_v2.py
+python3 /tmp/prefetch_deps.py
 ./bazel build //main:sorbet --config=dbg 2>&1 | grep "https://" | while read url; do
     curl -L -o ~/.cache/bazel-distdir/$(basename "$url") "$url"
 done
