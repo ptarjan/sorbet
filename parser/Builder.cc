@@ -1,8 +1,3 @@
-// Include regex before any project headers to avoid poison identifier issue
-#include <algorithm>
-#include <regex>
-#include <typeinfo>
-
 #include "parser/Builder.h"
 #include "absl/strings/str_split.h"
 #include "common/common.h"
@@ -16,6 +11,9 @@
 #include "ruby_parser/diagnostic.hh"
 
 #include "absl/algorithm/container.h"
+#include <algorithm>
+#include <regex>
+#include <typeinfo>
 
 using ruby_parser::ForeignPtr;
 using ruby_parser::node_list;

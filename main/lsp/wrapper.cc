@@ -1,7 +1,3 @@
-// Include regex before project headers to avoid poison identifier issue
-#include <memory>
-#include <regex>
-
 #include "main/lsp/wrapper.h"
 #include "core/ErrorQueue.h"
 #include "core/NullFlusher.h"
@@ -14,6 +10,8 @@
 #include "main/pipeline/pipeline.h"
 #include "payload/payload.h"
 #include "sorbet_version/sorbet_version.h"
+#include <memory>
+#include <regex>
 
 using namespace std;
 

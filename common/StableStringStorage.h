@@ -1,7 +1,6 @@
 #ifndef SORBET_STABLE_STRING_STORAGE_H
 #define SORBET_STABLE_STRING_STORAGE_H
 
-#include <cstring>
 #include <string>
 #include <utility>
 #include <vector>

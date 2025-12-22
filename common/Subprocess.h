@@ -2,7 +2,6 @@
 #define SORBET_SUBPROCESS_H
 #include <optional>
 #include <string>
-#include <vector>
 
 namespace sorbet {
 
