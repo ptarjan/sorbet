@@ -144,8 +144,10 @@ void sorbet_setupFunctionInlineCache(struct FunctionInlineCache *cache, ID mid, 
 void sorbet_vmMethodSearch(struct FunctionInlineCache *cache, VALUE recv) {
     struct rb_call_data *cd = &cache->cd;
     // In Ruby 3.0, vm_search_method takes 3 args: cd_owner, cd, recv
-    // We pass Qundef as cd_owner since we're not associated with a particular object
-    vm_search_method(Qundef, cd, recv);
+    // We pass Qfalse as cd_owner because Sorbet's inline cache is not a Ruby object.
+    // Using Qfalse (value 0) prevents the GC write barrier from trying to access it.
+    // (Using Qundef would crash because its value 0x34 is dereferenced as a pointer)
+    vm_search_method(Qfalse, cd, recv);
 }
 
 // Send Support ********************************************************************************************************
@@ -412,7 +414,10 @@ static inline VALUE sorbet_vm_sendish(struct rb_execution_context_struct *ec, st
 
     // inlined instead of called via vm_search_method_wrap
     // In Ruby 3.0, vm_search_method takes 3 args: cd_owner, cd, recv
-    vm_search_method(Qundef, cd, recv);
+    // We pass Qfalse as cd_owner because Sorbet's inline cache is not a Ruby object.
+    // Using Qfalse (value 0) prevents the GC write barrier from trying to access it.
+    // (Using Qundef would crash because its value 0x34 is dereferenced as a pointer)
+    vm_search_method(Qfalse, cd, recv);
 
     // In Ruby 3.0, calling gets ci and cc from the call data
     calling.ci = cd->ci;
