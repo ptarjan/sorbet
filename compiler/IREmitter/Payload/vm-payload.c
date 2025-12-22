@@ -19,6 +19,7 @@
 // These are special "public" headers which don't live in include/ruby for some
 // reason
 #include "internal.h"
+#include "internal/hash.h"
 #include "ruby.h"
 #include <signal.h>
 

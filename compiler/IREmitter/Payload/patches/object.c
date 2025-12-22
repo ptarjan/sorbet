@@ -116,7 +116,7 @@ VALUE sorbet_vm_class_alloc(VALUE klass) {
 }
 
 VALUE (*sorbet_vm_Class_new_func(void))() {
-    return rb_class_s_new;
+    return rb_class_new_instance_pass_kw;
 }
 
 VALUE (*sorbet_vm_Kernel_instance_variable_get_func(void))(VALUE obj, VALUE iv) {

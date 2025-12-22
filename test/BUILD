@@ -541,7 +541,7 @@ sh_binary(
     data = [
         "patch_require.rb",
         "//gems/sorbet-runtime",
-        "@sorbet_ruby_2_7_for_compiler//:ruby",
+        "@sorbet_ruby_3_0_for_compiler//:ruby",
     ],
     deps = [
         ":logging",
@@ -575,7 +575,7 @@ sh_binary(
     srcs = ["validate_exp.sh"],
     data = [
         "diff-diff.rb",
-        "@sorbet_ruby_2_7_for_compiler//:ruby",
+        "@sorbet_ruby_3_0_for_compiler//:ruby",
     ],
     tags = ["compiler"],
     deps = [

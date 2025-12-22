@@ -43,7 +43,7 @@ rb=${4}
 rbrunfile=$(mktemp)
 
 # Find ruby
-ruby="$(rlocation sorbet_ruby_2_7_for_compiler/ruby)"
+ruby="$(rlocation sorbet_ruby_3_0_for_compiler/ruby)"
 
 # These paths are absolute when running standalone, but relative when running
 # in the sandbox. To work around this, we pull out these dirs and use -I below

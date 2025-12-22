@@ -433,15 +433,15 @@ diff -ruN '--exclude=*.orig' a/vm_eval.c b/vm_eval.c
 +static VALUE
 +vm_call0_sorbet_with_frame(rb_execution_context_t* ec, struct rb_calling_info *calling, struct rb_call_data *cd, const VALUE *argv)
 +{
-+    const struct rb_call_info *ci = &cd->ci;
-+    const struct rb_call_cache *cc = &cd->cc;
++    const struct rb_callinfo *ci = cd->ci;
++    const struct rb_callcache *cc = cd->cc;
 +    VALUE val;
-+    const rb_callable_method_entry_t *me = cc->me;
++    const rb_callable_method_entry_t *me = vm_cc_cme(cc);
 +    const rb_method_sorbet_t *sorbet = UNALIGNED_MEMBER_PTR(me->def, body.sorbet);
 +
 +    VALUE recv = calling->recv;
 +    int argc = calling->argc;
-+    ID mid = ci->mid;
++    ID mid = vm_ci_mid(ci);
 +    VALUE block_handler = calling->block_handler;
 +    /* We are close enough to VM_METHOD_TYPE_CFUNC that we claim our frames are C function frames.
 +     * We do not set VM_FRAME_MAGIC_CFRAME because we do maintain local variables that can
@@ -551,7 +551,7 @@ diff -ruN '--exclude=*.orig' a/vm_insnhelper.c b/vm_insnhelper.c
 +
 +/* This call combines vm_call_iseq_optimizable_p and logic in vm_callee_setup_arg */
 +static enum sorbet_method_opt_kind
-+vm_call_sorbet_optimizable_p(const struct rb_call_info *ci, const struct rb_call_cache *cc,
++vm_call_sorbet_optimizable_p(const struct rb_callinfo *ci, const struct rb_callcache *cc,
 +                             const struct rb_calling_info *calling, const rb_method_sorbet_t *sorbet)
 +{
 +    /* Splat calls are generally not interesting, because they can introduce kwsplats
@@ -566,7 +566,7 @@ diff -ruN '--exclude=*.orig' a/vm_insnhelper.c b/vm_insnhelper.c
 +    }
 +
 +    /* Protected methods are weird, so don't deal with them. */
-+    if (METHOD_ENTRY_VISI(cc->me) == METHOD_VISI_PROTECTED) {
++    if (METHOD_ENTRY_VISI(vm_cc_cme(cc)) == METHOD_VISI_PROTECTED) {
 +        return SORBET_METHOD_OPT_NONE;
 +    }
 +
@@ -590,7 +590,7 @@ diff -ruN '--exclude=*.orig' a/vm_insnhelper.c b/vm_insnhelper.c
 +         */
 +        const int lead_num = sorbet->param->lead_num;
 +        const int argc = calling->argc;
-+        const struct rb_call_info_kw_arg *kw_arg = ((struct rb_call_info_with_kwarg *)ci)->kw_arg;
++        const struct rb_callinfo_kwarg *kw_arg = vm_ci_kwarg(ci);
 +
 +        if (argc - kw_arg->keyword_len == lead_num) {
 +            return SORBET_METHOD_OPT_EFFICIENT_KWARGS;
@@ -614,7 +614,7 @@ diff -ruN '--exclude=*.orig' a/vm_insnhelper.c b/vm_insnhelper.c
 +static VALUE
 +vm_call_sorbet_with_frame_normal(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, struct rb_calling_info *calling, struct rb_call_data *cd, const rb_callable_method_entry_t *me, int check_kw_splat, int empty_kw_splat, int argc, int param_size, int local_size)
 +{
-+    const struct rb_call_info *ci = &cd->ci;
++    const struct rb_callinfo *ci = cd->ci;
 +    VALUE val;
 +    const rb_method_sorbet_t *sorbet = UNALIGNED_MEMBER_PTR(me->def, body.sorbet);
 +
@@ -636,7 +636,7 @@ diff -ruN '--exclude=*.orig' a/vm_insnhelper.c b/vm_insnhelper.c
 +    }
 +
 +    RUBY_DTRACE_CMETHOD_ENTRY_HOOK(ec, me->owner, me->def->original_id);
-+    EXEC_EVENT_HOOK(ec, RUBY_EVENT_C_CALL, recv, me->def->original_id, ci->mid, me->owner, Qundef);
++    EXEC_EVENT_HOOK(ec, RUBY_EVENT_C_CALL, recv, me->def->original_id, vm_ci_mid(ci), me->owner, Qundef);
 +
 +    rb_control_frame_t *new_cfp = vm_push_frame(ec, sorbet->iseqptr, frame_type, recv,
 +                                                block_handler, (VALUE)me,
@@ -649,7 +649,7 @@ diff -ruN '--exclude=*.orig' a/vm_insnhelper.c b/vm_insnhelper.c
 +
 +    vm_pop_frame(ec, new_cfp, new_cfp->ep);
 +
-+    EXEC_EVENT_HOOK(ec, RUBY_EVENT_C_RETURN, recv, me->def->original_id, ci->mid, me->owner, val);
++    EXEC_EVENT_HOOK(ec, RUBY_EVENT_C_RETURN, recv, me->def->original_id, vm_ci_mid(ci), me->owner, val);
 +    RUBY_DTRACE_CMETHOD_RETURN_HOOK(ec, me->owner, me->def->original_id);
 +
 +    return val;
@@ -659,7 +659,7 @@ diff -ruN '--exclude=*.orig' a/vm_insnhelper.c b/vm_insnhelper.c
 +vm_call_sorbet_with_frame(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, struct rb_calling_info *calling, struct rb_call_data *cd, int empty_kw_splat)
 +{
 +    const int check_kw_splat = 1;
-+    const rb_callable_method_entry_t *me = cd->cc.me;
++    const rb_callable_method_entry_t *me = vm_cc_cme(cd->cc);
 +    const rb_method_sorbet_t *sorbet = UNALIGNED_MEMBER_PTR(me->def, body.sorbet);
 +    const int argc = calling->argc;
 +    const int param_size = calling->argc;
@@ -670,12 +670,12 @@ diff -ruN '--exclude=*.orig' a/vm_insnhelper.c b/vm_insnhelper.c
 +static VALUE
 +vm_call_sorbet_kwargs(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
 +{
-+    const struct rb_kwarg_call_data *kcd = (void *)cd;
-+    const struct rb_call_info_with_kwarg *ci_kw = &kcd->ci_kw;
++    const struct rb_callinfo *ci = cd->ci;
++    const struct rb_callinfo_kwarg *kw_arg = vm_ci_kwarg(ci);
 +    /* We have ensured that anything going through this function won't have kwsplats. */
 +    const int check_kw_splat = 0;
 +    const int empty_kw_splat = 0;
-+    const rb_callable_method_entry_t *me = cd->cc.me;
++    const rb_callable_method_entry_t *me = vm_cc_cme(cd->cc);
 +    const rb_method_sorbet_t *sorbet = UNALIGNED_MEMBER_PTR(me->def, body.sorbet);
 +
 +    /* Similarly to the above, we have ensured that anything going through this function
@@ -686,7 +686,7 @@ diff -ruN '--exclude=*.orig' a/vm_insnhelper.c b/vm_insnhelper.c
 +     * We do, however, need to adjust argc to make it reflect only the positional args
 +     * being passed.
 +     */
-+    const int argc = calling->argc - ci_kw->kw_arg->keyword_len;
++    const int argc = calling->argc - kw_arg->keyword_len;
 +    const int param_size = calling->argc;
 +    const int locals = sorbet->iseqptr->body->local_table_size;
 +    return vm_call_sorbet_with_frame_normal(ec, reg_cfp, calling, cd, me, check_kw_splat, empty_kw_splat, argc, param_size, locals);
@@ -695,7 +695,7 @@ diff -ruN '--exclude=*.orig' a/vm_insnhelper.c b/vm_insnhelper.c
 +static VALUE
 +vm_call_sorbet(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
 +{
-+    const struct rb_call_info *ci = &cd->ci;
++    const struct rb_callinfo *ci = cd->ci;
 +    int empty_kw_splat;
 +    RB_DEBUG_COUNTER_INC(ccf_cfunc);
 +
@@ -1010,7 +1010,7 @@ diff -ruN '--exclude=*.orig' a/vm_insnhelper.c b/vm_insnhelper.c
 +};
 +
 +static inline vm_call_handler
-+vm_call_sorbet_fast_func(const struct rb_call_info *ci, const int param_size, const int local_size)
++vm_call_sorbet_fast_func(const struct rb_callinfo *ci, const int param_size, const int local_size)
 +{
 +    /* Don't have to handle VM_CALL_TAILCALL. */
 +    if (param_size <= 3 && local_size <= 5) {
@@ -1027,9 +1027,9 @@ diff -ruN '--exclude=*.orig' a/vm_insnhelper.c b/vm_insnhelper.c
 +static VALUE
 +vm_call_sorbet_maybe_setup_fastpath(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, struct rb_call_data *cd)
 +{
-+    const struct rb_call_info *ci = &cd->ci;
-+    struct rb_call_cache *cc = &cd->cc;
-+    const rb_method_sorbet_t *sorbet = UNALIGNED_MEMBER_PTR(cc->me->def, body.sorbet);
++    const struct rb_callinfo *ci = cd->ci;
++    const struct rb_callcache *cc = cd->cc;
++    const rb_method_sorbet_t *sorbet = UNALIGNED_MEMBER_PTR(vm_cc_cme(cc)->def, body.sorbet);
 +    enum sorbet_method_opt_kind kind = vm_call_sorbet_optimizable_p(ci, cc, calling, sorbet);
 +
 +    /* vm_call_sorbet has already been set as the fastpath before we enter this

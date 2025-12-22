@@ -2,9 +2,8 @@
 
 // compiler is closely aware of layout of this struct
 struct FunctionInlineCache {
-    // We use an `rb_kwarg_call_data` instead of `rb_call_data` as they contain the same data, and the kwarg variant
-    // only adds a single pointer's worth of additional space.
-    struct rb_kwarg_call_data cd;
+    // In Ruby 3.0, rb_call_data contains pointers to rb_callinfo and rb_callcache
+    struct rb_call_data cd;
 };
 
 void sorbet_setExceptionStackFrame(rb_execution_context_t *ec, rb_control_frame_t *cfp, const rb_iseq_t *iseq) {
@@ -48,7 +47,7 @@ rb_control_frame_t *sorbet_pushCfuncFrame(struct FunctionInlineCache *cache, VAL
     rb_execution_context_t *ec = GET_EC();
 
     // NOTE: method search must be done to ensure that this field is not NULL
-    const rb_callable_method_entry_t *me = cache->cd.cc.me;
+    const rb_callable_method_entry_t *me = vm_cc_cme(cache->cd.cc);
     VALUE frame_type = VM_FRAME_MAGIC_CFUNC | VM_ENV_FLAG_LOCAL;
 
     // TODO(trevor) we could pass this in to supply a block
@@ -110,35 +109,35 @@ void sorbet_setupFunctionInlineCache(struct FunctionInlineCache *cache, ID mid, 
                                      int num_kwargs, ...) {
     va_list kw_ids;
     va_start(kw_ids, num_kwargs);
-    struct rb_kwarg_call_data *cd = &cache->cd;
+    struct rb_call_data *cd = &cache->cd;
 
-    cd->ci_kw.ci.mid = mid;
-    cd->ci_kw.ci.orig_argc = argc;
-    cd->ci_kw.ci.flag = flags;
+    const struct rb_callinfo_kwarg *kw_arg = NULL;
 
     if (num_kwargs > 0) {
-        // The layout for struct_rb_call_info_with_kwarg has a 1-element array as the last field, so allocating
+        // The layout for struct rb_callinfo_kwarg has a 1-element array as the last field, so allocating
         // additional space will extend that array's length.
-        struct rb_call_info_kw_arg *kw_arg = (struct rb_call_info_kw_arg *)rb_xmalloc_mul_add(
-            num_kwargs - 1, sizeof(VALUE), sizeof(struct rb_call_info_kw_arg));
+        struct rb_callinfo_kwarg *kw_arg_mutable = (struct rb_callinfo_kwarg *)rb_xmalloc_mul_add(
+            num_kwargs - 1, sizeof(VALUE), sizeof(struct rb_callinfo_kwarg));
 
-        kw_arg->keyword_len = num_kwargs;
+        kw_arg_mutable->keyword_len = num_kwargs;
         for (int i = 0; i < num_kwargs; ++i) {
             ID id = va_arg(kw_ids, ID);
-            kw_arg->keywords[i] = ID2SYM(id);
+            kw_arg_mutable->keywords[i] = ID2SYM(id);
         }
-
-        cd->ci_kw.kw_arg = kw_arg;
-    } else {
-        cd->ci_kw.kw_arg = NULL;
+        kw_arg = kw_arg_mutable;
     }
     va_end(kw_ids);
+
+    // In Ruby 3.0, we use vm_ci_new_runtime to create the callinfo
+    cd->ci = vm_ci_new_runtime(mid, flags, argc, kw_arg);
+    cd->cc = NULL;  // Will be filled in by vm_search_method
 }
 
 void sorbet_vmMethodSearch(struct FunctionInlineCache *cache, VALUE recv) {
-    // we keep an `rb_kwarg_call_data` in FunctionInline cache.
-    struct rb_call_data *cd = (struct rb_call_data *)&cache->cd;
-    vm_search_method(cd, recv);
+    struct rb_call_data *cd = &cache->cd;
+    // In Ruby 3.0, vm_search_method takes 3 args: cd_owner, cd, recv
+    // We pass Qundef as cd_owner since we're not associated with a particular object
+    vm_search_method(Qundef, cd, recv);
 }
 
 // Send Support ********************************************************************************************************
@@ -210,14 +209,14 @@ static VALUE sorbet_vm_call_opt_call(rb_execution_context_t *ec, rb_control_fram
 // https://github.com/ruby/ruby/blob/5445e0435260b449decf2ac16f9d09bae3cafe72/vm_insnhelper.c#L2911-L2993
 static VALUE sorbet_vm_call_method_each_type(rb_execution_context_t *ec, rb_control_frame_t *cfp,
                                              struct rb_calling_info *calling, struct rb_call_data *cd) {
-    const struct rb_call_info *ci = &cd->ci;
-    struct rb_call_cache *cc = &cd->cc;
+    const struct rb_callinfo *ci = cd->ci;
+    const struct rb_callcache *cc = cd->cc;
 
 // begin differences from vm_call_method_each_type
 again:
     // end differences from vm_call_method_each_type
 
-    switch (cc->me->def->type) {
+    switch (vm_cc_cme(cc)->def->type) {
         case VM_METHOD_TYPE_ISEQ:
             CC_SET_FASTPATH(cc, vm_call_iseq_setup, TRUE);
             return vm_call_iseq_setup(ec, cfp, calling, cd);
@@ -240,20 +239,20 @@ again:
             }
 
             rb_check_arity(calling->argc, 1, 1);
-            cc->aux.index = 0;
-            CC_SET_FASTPATH(cc, vm_call_attrset, !((ci->flag & VM_CALL_ARGS_SPLAT) || (ci->flag & VM_CALL_KWARG)));
+            vm_cc_attr_index_set(cc, 0);
+            CC_SET_FASTPATH(cc, vm_call_attrset, !((vm_ci_flag(ci) & VM_CALL_ARGS_SPLAT) || (vm_ci_flag(ci) & VM_CALL_KWARG)));
             return vm_call_attrset(ec, cfp, calling, cd);
 
         case VM_METHOD_TYPE_IVAR:
             CALLER_SETUP_ARG(cfp, calling, ci);
             CALLER_REMOVE_EMPTY_KW_SPLAT(cfp, calling, ci);
             rb_check_arity(calling->argc, 0, 0);
-            cc->aux.index = 0;
-            CC_SET_FASTPATH(cc, vm_call_ivar, !(ci->flag & VM_CALL_ARGS_SPLAT));
+            vm_cc_attr_index_set(cc, 0);
+            CC_SET_FASTPATH(cc, vm_call_ivar, !(vm_ci_flag(ci) & VM_CALL_ARGS_SPLAT));
             return vm_call_ivar(ec, cfp, calling, cd);
 
         case VM_METHOD_TYPE_MISSING:
-            cc->aux.method_missing_reason = 0;
+            vm_cc_method_missing_reason_set(cc, 0);
             CC_SET_FASTPATH(cc, vm_call_method_missing, TRUE);
             return vm_call_method_missing(ec, cfp, calling, cd);
 
@@ -261,13 +260,16 @@ again:
             CC_SET_FASTPATH(cc, vm_call_bmethod, TRUE);
             return vm_call_bmethod(ec, cfp, calling, cd);
 
-        case VM_METHOD_TYPE_ALIAS:
-            CC_SET_ME(cc, aliased_callable_method_entry(cc->me));
-            VM_ASSERT(cc->me != NULL);
-            return sorbet_vm_call_method_each_type(ec, cfp, calling, cd);
+        case VM_METHOD_TYPE_ALIAS: {
+            const rb_callable_method_entry_t *cme = vm_cc_cme(cc);
+            cme = aliased_callable_method_entry(cme);
+            VM_ASSERT(cme != NULL);
+            // In Ruby 3.0, we need to search for the method again with the aliased method
+            return vm_call_alias(ec, cfp, calling, cd);
+        }
 
         case VM_METHOD_TYPE_OPTIMIZED:
-            switch (cc->me->def->body.optimize_type) {
+            switch (vm_cc_cme(cc)->def->body.optimize_type) {
                 case OPTIMIZED_METHOD_TYPE_SEND:
                     CC_SET_FASTPATH(cc, vm_call_opt_send, TRUE);
                     return vm_call_opt_send(ec, cfp, calling, cd);
@@ -282,14 +284,14 @@ again:
                     CC_SET_FASTPATH(cc, vm_call_opt_block_call, TRUE);
                     return vm_call_opt_block_call(ec, cfp, calling, cd);
                 default:
-                    rb_bug("vm_call_method: unsupported optimized method type (%d)", cc->me->def->body.optimize_type);
+                    rb_bug("vm_call_method: unsupported optimized method type (%d)", vm_cc_cme(cc)->def->body.optimize_type);
             }
 
         case VM_METHOD_TYPE_UNDEF:
             break;
 
         case VM_METHOD_TYPE_ZSUPER:
-            return vm_call_zsuper(ec, cfp, calling, cd, RCLASS_ORIGIN(cc->me->defined_class));
+            return vm_call_zsuper(ec, cfp, calling, cd, RCLASS_ORIGIN(vm_cc_cme(cc)->defined_class));
 
         case VM_METHOD_TYPE_REFINED: {
             // begin differences from vm_call_method_each_type
@@ -300,17 +302,20 @@ again:
             // a compiled context.
             // https://github.com/ruby/ruby/blob/5445e0435260b449decf2ac16f9d09bae3cafe72/vm_eval.c#L173-L198
 
-            if (cc->me->def->body.refined.orig_me) {
-                CC_SET_ME(cc, refined_method_callable_without_refinement(cc->me));
-                goto again;
+            const rb_callable_method_entry_t *cme = vm_cc_cme(cc);
+            if (cme->def->body.refined.orig_me) {
+                cme = refined_method_callable_without_refinement(cme);
+                // In Ruby 3.0, we need to do a new method search
+                return vm_call_refined(ec, cfp, calling, cd);
             }
 
-            VALUE super_class = RCLASS_SUPER(cc->me->defined_class);
+            VALUE super_class = RCLASS_SUPER(cme->defined_class);
             if (super_class) {
-                CC_SET_ME(cc, rb_callable_method_entry(super_class, ci->mid));
-                if (cc->me) {
+                const rb_callable_method_entry_t *super_cme = rb_callable_method_entry(super_class, vm_ci_mid(ci));
+                if (super_cme) {
                     RUBY_VM_CHECK_INTS(ec);
-                    goto again;
+                    // In Ruby 3.0, we delegate to vm_call_refined which handles this
+                    return vm_call_refined(ec, cfp, calling, cd);
                 }
             }
 
@@ -323,32 +328,33 @@ again:
         }
     }
 
-    rb_bug("vm_call_method: unsupported method type (%d)", cc->me->def->type);
+    rb_bug("vm_call_method: unsupported method type (%d)", vm_cc_cme(cc)->def->type);
 }
 
 // This is a version of vm_call_method that dispatches to `sorbet_vm_call_method_each_type` instead.
 // https://github.com/ruby/ruby/blob/5445e0435260b449decf2ac16f9d09bae3cafe72/vm_insnhelper.c#L3017-L3070
 static inline VALUE sorbet_vm_call_method(rb_execution_context_t *ec, rb_control_frame_t *cfp,
                                           struct rb_calling_info *calling, struct rb_call_data *cd) {
-    const struct rb_call_info *ci = &cd->ci;
-    struct rb_call_cache *cc = &cd->cc;
+    const struct rb_callinfo *ci = cd->ci;
+    const struct rb_callcache *cc = cd->cc;
+    const rb_callable_method_entry_t *cme = vm_cc_cme(cc);
 
-    VM_ASSERT(callable_method_entry_p(cc->me));
+    VM_ASSERT(callable_method_entry_p(cme));
 
-    if (cc->me != NULL) {
-        switch (METHOD_ENTRY_VISI(cc->me)) {
+    if (cme != NULL) {
+        switch (METHOD_ENTRY_VISI(cme)) {
             case METHOD_VISI_PUBLIC: /* likely */
                 // begin differences from vm_call_method_each_type
                 return sorbet_vm_call_method_each_type(ec, cfp, calling, cd);
                 // begin differences from vm_call_method_each_type
 
             case METHOD_VISI_PRIVATE:
-                if (!(ci->flag & VM_CALL_FCALL)) {
+                if (!(vm_ci_flag(ci) & VM_CALL_FCALL)) {
                     enum method_missing_reason stat = MISSING_PRIVATE;
-                    if (ci->flag & VM_CALL_VCALL)
+                    if (vm_ci_flag(ci) & VM_CALL_VCALL)
                         stat |= MISSING_VCALL;
 
-                    cc->aux.method_missing_reason = stat;
+                    vm_cc_method_missing_reason_set(cc, stat);
                     CC_SET_FASTPATH(cc, vm_call_method_missing, TRUE);
                     return vm_call_method_missing(ec, cfp, calling, cd);
                 }
@@ -357,25 +363,18 @@ static inline VALUE sorbet_vm_call_method(rb_execution_context_t *ec, rb_control
                 // end differences from vm_call_method_each_type
 
             case METHOD_VISI_PROTECTED:
-                if (!(ci->flag & VM_CALL_OPT_SEND)) {
-                    if (!rb_obj_is_kind_of(cfp->self, cc->me->defined_class)) {
-                        cc->aux.method_missing_reason = MISSING_PROTECTED;
+                if (!(vm_ci_flag(ci) & VM_CALL_OPT_SEND)) {
+                    if (!rb_obj_is_kind_of(cfp->self, cme->defined_class)) {
+                        vm_cc_method_missing_reason_set(cc, MISSING_PROTECTED);
                         return vm_call_method_missing(ec, cfp, calling, cd);
                     } else {
                         /* caching method info to dummy cc */
-                        VM_ASSERT(cc->me != NULL);
-                        if (ci->flag & VM_CALL_KWARG) {
-                            struct rb_kwarg_call_data *kcd = (void *)cd;
-                            struct rb_kwarg_call_data cd_entry = *kcd;
-                            // begin differences from vm_call_method_each_type
-                            return sorbet_vm_call_method_each_type(ec, cfp, calling, (void *)&cd_entry);
-                            // end differences from vm_call_method_each_type
-                        } else {
-                            struct rb_call_data cd_entry = *cd;
-                            // begin differences from vm_call_method_each_type
-                            return sorbet_vm_call_method_each_type(ec, cfp, calling, &cd_entry);
-                            // end differences from vm_call_method_each_type
-                        }
+                        VM_ASSERT(cme != NULL);
+                        // In Ruby 3.0, rb_call_data uses pointers, so we can just use cd directly
+                        struct rb_call_data cd_entry = *cd;
+                        // begin differences from vm_call_method_each_type
+                        return sorbet_vm_call_method_each_type(ec, cfp, calling, &cd_entry);
+                        // end differences from vm_call_method_each_type
                     }
                 }
                 // begin differences from vm_call_method_each_type
@@ -1032,7 +1031,7 @@ extern VALUE (*sorbet_vm_Class_new_func(void))();
 
 VALUE sorbet_maybeAllocateObjectFastPath(VALUE recv, struct FunctionInlineCache *newCache) {
     sorbet_vmMethodSearch(newCache, recv);
-    rb_method_definition_t *newDef = newCache->cd.cc.me->def;
+    rb_method_definition_t *newDef = vm_cc_cme(newCache->cd.cc)->def;
     if (newDef->type != VM_METHOD_TYPE_CFUNC) {
         return Qundef;
     }
@@ -1053,7 +1052,7 @@ extern VALUE (*sorbet_vm_Kernel_instance_variable_set_func(void))(VALUE obj, VAL
 VALUE sorbet_vm_instance_variable_get(struct FunctionInlineCache *getCache, IVC varCache, rb_control_frame_t *reg_cfp,
                                       VALUE recv, ID var) {
     sorbet_vmMethodSearch(getCache, recv);
-    rb_method_definition_t *getDef = getCache->cd.cc.me->def;
+    rb_method_definition_t *getDef = vm_cc_cme(getCache->cd.cc)->def;
     if (getDef->type == VM_METHOD_TYPE_CFUNC &&
         getDef->body.cfunc.func == sorbet_vm_Kernel_instance_variable_get_func()) {
         return sorbet_vm_getivar(recv, var, varCache);
@@ -1069,7 +1068,7 @@ VALUE sorbet_vm_instance_variable_get(struct FunctionInlineCache *getCache, IVC 
 VALUE sorbet_vm_instance_variable_set(struct FunctionInlineCache *setCache, IVC varCache, rb_control_frame_t *reg_cfp,
                                       VALUE recv, ID var, VALUE value) {
     sorbet_vmMethodSearch(setCache, recv);
-    rb_method_definition_t *setDef = setCache->cd.cc.me->def;
+    rb_method_definition_t *setDef = vm_cc_cme(setCache->cd.cc)->def;
     if (setDef->type == VM_METHOD_TYPE_CFUNC &&
         setDef->body.cfunc.func == sorbet_vm_Kernel_instance_variable_set_func()) {
         sorbet_vm_setivar(recv, var, value, varCache);
@@ -1086,7 +1085,7 @@ VALUE sorbet_vm_instance_variable_set(struct FunctionInlineCache *setCache, IVC 
 
 VALUE sorbet_vm_class(struct FunctionInlineCache *classCache, rb_control_frame_t *reg_cfp, VALUE recv) {
     sorbet_vmMethodSearch(classCache, recv);
-    rb_method_definition_t *classDef = classCache->cd.cc.me->def;
+    rb_method_definition_t *classDef = vm_cc_cme(classCache->cd.cc)->def;
     // We know that this function is the definition of Kernel#class.
     if (classDef->type == VM_METHOD_TYPE_CFUNC && classDef->body.cfunc.func == rb_obj_class) {
         return rb_obj_class(recv);
@@ -1105,7 +1104,7 @@ VALUE sorbet_vm_bang(struct FunctionInlineCache *bangCache, rb_control_frame_t *
         return Qfalse;
     }
     sorbet_vmMethodSearch(bangCache, recv);
-    rb_method_definition_t *bangDef = bangCache->cd.cc.me->def;
+    rb_method_definition_t *bangDef = vm_cc_cme(bangCache->cd.cc)->def;
     // cf. vm_opt_not
     if (bangDef->type == VM_METHOD_TYPE_CFUNC && bangDef->body.cfunc.func == rb_obj_not) {
         return RTEST(recv) ? Qfalse : Qtrue;
@@ -1118,7 +1117,7 @@ VALUE sorbet_vm_bang(struct FunctionInlineCache *bangCache, rb_control_frame_t *
 
 VALUE sorbet_vm_isa_p(struct FunctionInlineCache *isaCache, rb_control_frame_t *reg_cfp, VALUE recv, VALUE klass) {
     sorbet_vmMethodSearch(isaCache, recv);
-    rb_method_definition_t *isaDef = isaCache->cd.cc.me->def;
+    rb_method_definition_t *isaDef = vm_cc_cme(isaCache->cd.cc)->def;
     if (isaDef->type == VM_METHOD_TYPE_CFUNC && isaDef->body.cfunc.func == rb_obj_is_kind_of) {
         return rb_obj_is_kind_of(recv, klass);
     }
@@ -1131,7 +1130,7 @@ VALUE sorbet_vm_isa_p(struct FunctionInlineCache *isaCache, rb_control_frame_t *
 
 VALUE sorbet_vm_freeze(struct FunctionInlineCache *freezeCache, rb_control_frame_t *reg_cfp, VALUE recv) {
     sorbet_vmMethodSearch(freezeCache, recv);
-    rb_method_definition_t *freezeDef = freezeCache->cd.cc.me->def;
+    rb_method_definition_t *freezeDef = vm_cc_cme(freezeCache->cd.cc)->def;
     if (freezeDef->type == VM_METHOD_TYPE_CFUNC && freezeDef->body.cfunc.func == rb_obj_freeze) {
         return rb_obj_freeze(recv);
     }

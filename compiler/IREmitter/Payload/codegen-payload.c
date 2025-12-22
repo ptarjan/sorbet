@@ -22,7 +22,8 @@ typedef VALUE (*BlockConsumerFFIType)(VALUE recv, ID fun, int argc, VALUE *argv,
 
 // compiler is closely aware of layout of this struct
 struct FunctionInlineCache {
-    struct rb_kwarg_call_data cd;
+    // In Ruby 3.0, rb_call_data contains pointers to rb_callinfo and rb_callcache
+    struct rb_call_data cd;
 };
 
 struct sorbet_iterMethodArg {
@@ -2338,7 +2339,7 @@ _Bool sorbet_is_kwsplat_calling(void *callingp) {
 SORBET_INLINE
 _Bool sorbet_is_kwarg_calldata(void *cdp) {
     struct rb_call_data *cd = (struct rb_call_data *)cdp;
-    return (cd->ci.flag & VM_CALL_KWARG) != 0;
+    return (vm_ci_flag(cd->ci) & VM_CALL_KWARG) != 0;
 }
 
 SORBET_INLINE
@@ -2353,11 +2354,11 @@ _Bool sorbet_can_efficiently_parse_kwargs(VALUE maybeHash, void *callingp, void 
 
 SORBET_INLINE
 VALUE sorbet_kwarg_passed_value(void *cdp, ID kwarg, VALUE *kwargv) {
-    struct rb_kwarg_call_data *cd = (struct rb_kwarg_call_data *)cdp;
-    struct rb_call_info_kw_arg *ci_kw_arg = cd->ci_kw.kw_arg;
+    struct rb_call_data *cd = (struct rb_call_data *)cdp;
+    const struct rb_callinfo_kwarg *kw_arg = vm_ci_kwarg(cd->ci);
     VALUE kwarg_sym = rb_id2sym(kwarg);
-    for (int i = 0, len = ci_kw_arg->keyword_len; i < len; ++i) {
-        if (kwarg_sym == ci_kw_arg->keywords[i]) {
+    for (int i = 0, len = kw_arg->keyword_len; i < len; ++i) {
+        if (kwarg_sym == kw_arg->keywords[i]) {
             return kwargv[i];
         }
     }
@@ -2442,19 +2443,19 @@ VALUE sorbet_assertNoExtraKWArg(VALUE maybeHash, int requiredKwargs, int optiona
 
 SORBET_INLINE
 void sorbet_assertCallDataNoExtraKWArg(void *cdp, int requiredKwargs, int optionalParsed) {
-    struct rb_kwarg_call_data *cd = (struct rb_kwarg_call_data *)cdp;
-    struct rb_call_info_kw_arg *ci_kw_arg = cd->ci_kw.kw_arg;
-    if (ci_kw_arg->keyword_len == 0) {
+    struct rb_call_data *cd = (struct rb_call_data *)cdp;
+    const struct rb_callinfo_kwarg *kw_arg = vm_ci_kwarg(cd->ci);
+    if (kw_arg->keyword_len == 0) {
         return;
     }
 
-    if (LIKELY((ci_kw_arg->keyword_len - requiredKwargs) == optionalParsed)) {
+    if (LIKELY((kw_arg->keyword_len - requiredKwargs) == optionalParsed)) {
         return;
     }
 
     // TODO: this is not quite right, since we're not specifying the particular
     // keywords that are missing.
-    sorbet_raiseCallDataExtraKeywords(ci_kw_arg->keyword_len, &ci_kw_arg->keywords[0]);
+    sorbet_raiseCallDataExtraKeywords(kw_arg->keyword_len, (VALUE *)&kw_arg->keywords[0]);
 }
 
 SORBET_INLINE

@@ -1,5 +1,6 @@
 #include "id.h"
 #include "internal.h"
+#include "internal/hash.h"
 #include "ruby.h"
 #include "vm_core.h"
 
@@ -73,8 +74,6 @@ struct transform_ctx {
     /* Copied from the prop_descs_vec that we are dealing with.  */
     size_t n_modules;
     VALUE *modules;
-
-    struct rb_call_data *caches;
 
     /* Propagating down the strict parameter of the top-level call.  */
     VALUE strict;
@@ -303,11 +302,11 @@ static VALUE transform_deep_clone_object(VALUE x, struct transform_ctx *ctx, str
 }
 
 static VALUE transform_call_from_hash(VALUE x, struct transform_ctx *ctx, struct transform_step *self) {
-    return rb_funcallv_with_cc(&ctx->caches[self->cache], ctx->modules[self->idx], rb_intern("from_hash"), 1, &x);
+    return rb_funcallv(ctx->modules[self->idx], rb_intern("from_hash"), 1, &x);
 }
 
 static VALUE transform_call_deserialize(VALUE x, struct transform_ctx *ctx, struct transform_step *self) {
-    return rb_funcallv_with_cc(&ctx->caches[self->cache], ctx->modules[self->idx], rb_intern("deserialize"), 1, &x);
+    return rb_funcallv(ctx->modules[self->idx], rb_intern("deserialize"), 1, &x);
 }
 
 /* This struct stores data we accumulate while we're deciding how to serialize/deserialize
@@ -319,12 +318,6 @@ struct serde_ctx {
      */
     size_t module_index;
     VALUE module_array;
-
-    size_t call_cache_index;
-    /* IDs (as symbols) representing the method to be called for the particular
-     * call cache being reserved.
-     */
-    VALUE call_cache_array;
 };
 
 static struct transform_step *step_new_priv(transform_fun fun, size_t idx, size_t cache, struct transform_step *closure,
@@ -427,11 +420,6 @@ static size_t push_module(struct serde_ctx *ctx, VALUE klass) {
     return ctx->module_index++;
 }
 
-static size_t reserve_call_cache(struct serde_ctx *ctx, ID id) {
-    rb_ary_push(ctx->call_cache_array, rb_id2sym(id));
-    return ctx->call_cache_index++;
-}
-
 /* type: Module */
 static struct transform_step *handle_serializable_subtype(struct serde_ctx *ctx, VALUE type, enum StepMode mode) {
     switch (mode) {
@@ -439,8 +427,7 @@ static struct transform_step *handle_serializable_subtype(struct serde_ctx *ctx,
             return step_new(transform_call_serialize, NULL);
         case Deserialize: {
             size_t idx = push_module(ctx, type);
-            size_t cache = reserve_call_cache(ctx, rb_intern("from_hash"));
-            return step_new_indexed(transform_call_from_hash, idx, cache);
+            return step_new_indexed(transform_call_from_hash, idx, 0);
         }
     }
 }
@@ -452,8 +439,7 @@ static struct transform_step *handle_custom_type(struct serde_ctx *ctx, VALUE ty
             return step_new(transform_call_checked_serialize, NULL);
         case Deserialize: {
             size_t idx = push_module(ctx, type);
-            size_t cache = reserve_call_cache(ctx, rb_intern("deserialize"));
-            return step_new_indexed(transform_call_deserialize, idx, cache);
+            return step_new_indexed(transform_call_deserialize, idx, 0);
         }
     }
 }
@@ -764,18 +750,13 @@ struct prop_descs_vec {
     size_t n_modules;
     VALUE *modules;
 
-    /* Call caches.  Transform steps that call Ruby methods hold indices into
-     * this array.  */
-    size_t n_caches;
-    struct rb_call_data *caches;
-
     /* The actual property descriptors.  */
     size_t n_descs;
     struct prop_desc *descs;
 };
 
 /* Transfer accumulated context information such as the modules for custom
- * serialization/deserialization or call caches from `ctx` into `vec`; we have already
+ * serialization/deserialization from `ctx` into `vec`; we have already
  * allocated the property descriptors for `vec`.
  */
 static void transfer_context(struct serde_ctx *ctx, struct prop_descs_vec *vec) {
@@ -790,17 +771,6 @@ static void transfer_context(struct serde_ctx *ctx, struct prop_descs_vec *vec) 
             vec->modules[i] = RARRAY_AREF(ctx->module_array, i);
         }
     }
-
-    if (ctx->call_cache_index == 0) {
-        vec->n_caches = 0;
-        vec->caches = NULL;
-    } else {
-        vec->n_caches = ctx->call_cache_index;
-        vec->caches = calloc(sizeof(*vec->caches), ctx->call_cache_index);
-        for (long i = 0; i < ctx->call_cache_index; ++i) {
-            vec->caches[i].ci.mid = rb_sym2id(RARRAY_AREF(ctx->call_cache_array, i));
-        }
-    }
 }
 
 /* This function and the interface it implements exists only to provide accounting
@@ -813,7 +783,6 @@ static size_t prop_descs_vec_memsize(const void *data) {
     const struct prop_descs_vec *vec = data;
     const size_t self_size = sizeof(*vec);
     const size_t modules_size = sizeof(*vec->modules) * vec->n_modules;
-    const size_t caches_size = sizeof(*vec->caches) * vec->n_caches;
     const size_t descs_size = sizeof(*vec->descs) * vec->n_descs;
     return self_size + modules_size + descs_size;
 }
@@ -838,7 +807,6 @@ static void prop_descs_vec_free(void *data) {
         step_free(desc->transform);
     }
     free(vec->modules);
-    free(vec->caches);
     free(vec->descs);
     free(vec);
 }
@@ -1072,8 +1040,6 @@ static struct prop_descs_vec *generate_serialize_descs(VALUE self, VALUE props) 
     struct serialize_descs_closure closure;
     closure.ctx.module_index = 0;
     closure.ctx.module_array = rb_ary_new();
-    closure.ctx.call_cache_index = 0;
-    closure.ctx.call_cache_array = rb_ary_new();
     closure.descs_array = descs;
     closure.i = 0;
 
@@ -1099,7 +1065,6 @@ static VALUE t_props_generated_serialize_impl(VALUE self, VALUE strict) {
     struct transform_ctx ctx;
     ctx.n_modules = vec->n_modules;
     ctx.modules = vec->modules;
-    ctx.caches = vec->caches;
     ctx.strict = strict;
 
     for (long i = 0; i < descs_length; ++i) {
@@ -1137,8 +1102,6 @@ static struct prop_descs_vec *generate_deserialize_descs(VALUE self, VALUE props
     struct deserialize_desc_closure closure;
     closure.ctx.module_index = 0;
     closure.ctx.module_array = rb_ary_new();
-    closure.ctx.call_cache_index = 0;
-    closure.ctx.call_cache_array = rb_ary_new();
     closure.defaults = defaults;
     closure.descs_array = descs;
     closure.i = 0;
@@ -1249,7 +1212,6 @@ run_deserialization(VALUE self, VALUE hash, struct prop_descs_vec *vec,
     struct transform_ctx ctx;
     ctx.n_modules = vec->n_modules;
     ctx.modules = vec->modules;
-    ctx.caches = vec->caches;
     ctx.strict = Qfalse;
 
     for (long i = 0; i < descs_length; ++i) {

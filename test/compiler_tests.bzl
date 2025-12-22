@@ -505,7 +505,7 @@ validate_sorbet_output_test = rule(
         ),
         "_ruby": attr.label(
             cfg = "target",
-            default = "@sorbet_ruby_2_7_for_compiler//:ruby",
+            default = "@sorbet_ruby_3_0_for_compiler//:ruby",
             executable = True,
         ),
         "_sorbet_runtime": attr.label(
