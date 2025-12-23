@@ -435,10 +435,15 @@ static inline VALUE sorbet_vm_sendish(struct rb_execution_context_struct *ec, st
     // We need to avoid using `vm_call_general`, and instead call `sorbet_vm_call_general`. See the comments in
     // `sorbet_vm_call_method_each_type` for more information.
     //
+    // Similarly, we need to use `sorbet_vm_call_opt_call` instead of `vm_call_opt_call` to properly handle
+    // lambda returns. See the comments in `sorbet_vm_call_opt_call` for more information.
+    //
     // Uses UNLIKELY to make the fast path of "call cache hit" faster
-    // In Ruby 3.0, we check if the call cache handler is vm_call_general
+    // In Ruby 3.0, we check if the call cache handler is vm_call_general or vm_call_opt_call
     if (UNLIKELY(vm_cc_call(cd->cc) == vm_call_general)) {
         val = sorbet_vm_call_method(ec, GET_CFP(), &calling);
+    } else if (UNLIKELY(vm_cc_call(cd->cc) == vm_call_opt_call)) {
+        val = sorbet_vm_call_opt_call(ec, GET_CFP(), &calling);
     } else {
         val = vm_cc_call(cd->cc)(ec, GET_CFP(), &calling);
     }
@@ -476,10 +481,15 @@ static inline VALUE sorbet_vm_sendish_super(struct rb_execution_context_struct *
     // We need to avoid using `vm_call_general`, and instead call `sorbet_vm_call_general`. See the comments in
     // `sorbet_vm_call_method_each_type` for more information.
     //
+    // Similarly, we need to use `sorbet_vm_call_opt_call` instead of `vm_call_opt_call` to properly handle
+    // lambda returns. See the comments in `sorbet_vm_call_opt_call` for more information.
+    //
     // Uses UNLIKELY to make the fast path of "call cache hit" faster
-    // In Ruby 3.0, we check if the call cache handler is vm_call_general
+    // In Ruby 3.0, we check if the call cache handler is vm_call_general or vm_call_opt_call
     if (UNLIKELY(vm_cc_call(cd->cc) == vm_call_general)) {
         val = sorbet_vm_call_method(ec, GET_CFP(), &calling);
+    } else if (UNLIKELY(vm_cc_call(cd->cc) == vm_call_opt_call)) {
+        val = sorbet_vm_call_opt_call(ec, GET_CFP(), &calling);
     } else {
         val = vm_cc_call(cd->cc)(ec, GET_CFP(), &calling);
     }

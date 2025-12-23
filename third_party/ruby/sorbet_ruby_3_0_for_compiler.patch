@@ -1122,6 +1122,15 @@ diff -ruN '--exclude=*.orig' a/vm_insnhelper.c b/vm_insnhelper.c
  	arg = rb_ary_new4(argc, argv);
      }
      else if (argc == 0) {
+@@ -3720,7 +4314,7 @@
+
+     blockarg = rb_vm_bh_to_procval(ec, block_handler);
+
+-    frame_flag = VM_FRAME_MAGIC_IFUNC | VM_FRAME_FLAG_CFRAME | (me ? VM_FRAME_FLAG_BMETHOD : 0);
++    frame_flag = VM_FRAME_MAGIC_IFUNC | VM_FRAME_FLAG_CFRAME | (me ? VM_FRAME_FLAG_BMETHOD : 0) | (is_lambda ? VM_FRAME_FLAG_LAMBDA : 0);
+     if (kw_splat) {
+         frame_flag |= VM_FRAME_FLAG_CFRAME_KW;
+     }
 @@ -3730,6 +4324,6 @@
  		  self,
  		  VM_GUARDED_PREV_EP(captured->ep),
